@@ -1,0 +1,11 @@
+# Allowlist: only what the image build needs. Nothing under docs/ ever enters.
+*
+!src
+!migrations
+!pyproject.toml
+!uv.lock
+!README.md
+!LICENSE
+
+**/__pycache__
+**/*.py[cod]

@@ -1,0 +1,66 @@
+# One command: docker compose up --build
+#
+# Every value has a local default, so a fresh clone with no .env still runs.
+# Override any ${VAR} from your shell or a .env file. Passwords that contain
+# URL special characters (@ : / ? # %) must be percent encoded.
+
+x-app: &app
+  build: .
+  image: claim-intake:local
+
+services:
+  db:
+    image: postgres:18.7-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-claim_intake}
+    volumes:
+      # Postgres 18 images keep data under /var/lib/postgresql (not .../data).
+      - pgdata:/var/lib/postgresql
+    ports:
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
+    healthcheck:
+      # -h forces TCP, so this cannot pass against the socket only server
+      # that runs during first time init.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  migrate:
+    <<: *app
+    command: ["python", "-m", "claim_intake.db.migrate"]
+    environment:
+      DATABASE_URL: postgresql://claim_app:${CLAIM_APP_PASSWORD:-claim_app}@db:5432/${POSTGRES_DB:-claim_intake}
+      MIGRATE_DATABASE_URL: postgresql://claim_owner:${CLAIM_OWNER_PASSWORD:-claim_owner}@db:5432/${POSTGRES_DB:-claim_intake}
+      ADMIN_DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/postgres
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  app:
+    <<: *app
+    environment:
+      DATABASE_URL: postgresql://claim_app:${CLAIM_APP_PASSWORD:-claim_app}@db:5432/${POSTGRES_DB:-claim_intake}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    healthcheck:
+      # slim has no curl; a 503 raises, so the check fails.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+volumes:
+  pgdata:
