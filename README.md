@@ -44,14 +44,30 @@ uv run uvicorn claim_intake.api.app:create_app --factory --reload
 
 ## Tests
 
-Tests run against a real PostgreSQL. With the database up and `.env` in place:
+Tests run against a real PostgreSQL. They read their database URLs from the
+environment only, never from `.env`, so load it explicitly. With the database
+up and `.env` in place:
 
 ```sh
-uv run pytest
+uv run --env-file .env pytest
 ```
 
 The run creates and migrates `claim_intake_test` if it does not exist. The test
 database name must end in `_test`; the suite refuses anything else.
+
+## Checks
+
+Lint, format and type checks run on every commit once the hooks are installed,
+and again in CI:
+
+```sh
+uv run pre-commit install         # once per clone: pre-commit and commit-msg hooks
+uv run ruff check . && uv run ruff format .
+uv run mypy                       # strict, on src/claim_intake
+uv run pre-commit run --all-files
+```
+
+The hooks also block commits on `main` and reject any `Co-Authored-By` trailer.
 
 ## Configuration
 

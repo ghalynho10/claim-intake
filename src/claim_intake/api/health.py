@@ -23,7 +23,12 @@ class Health(BaseModel):
 
 @router.get(
     "/health",
-    responses={status.HTTP_503_SERVICE_UNAVAILABLE: {"model": Health, "description": "Database unreachable"}},
+    responses={
+        status.HTTP_503_SERVICE_UNAVAILABLE: {
+            "model": Health,
+            "description": "Database unreachable",
+        }
+    },
 )
 def health(engine: EngineDep, response: Response) -> Health:
     try:
