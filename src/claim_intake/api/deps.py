@@ -7,7 +7,9 @@ from sqlalchemy import Engine
 
 
 def get_engine(request: Request) -> Engine:
-    return request.app.state.engine
+    """Hand routes the one engine the lifespan built, so tests can swap it per app."""
+    engine: Engine = request.app.state.engine
+    return engine
 
 
 EngineDep = Annotated[Engine, Depends(get_engine)]

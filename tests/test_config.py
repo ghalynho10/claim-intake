@@ -1,5 +1,6 @@
 """Config loads and validates at startup, and fails clearly on a bad value."""
 
+import secrets
 from pathlib import Path
 
 import pytest
@@ -7,7 +8,7 @@ import pytest
 from claim_intake.api.app import create_app
 from claim_intake.config import MigrateSettings, Settings, load_or_exit
 
-SECRET = "s3cret-pass"
+SECRET = secrets.token_hex(8)
 
 
 @pytest.fixture(autouse=True)

@@ -1,8 +1,9 @@
 """Shared fixtures. Tests run against a real PostgreSQL test database.
 
 Needs TEST_DATABASE_URL (the claim_app role on a database whose name ends in
-`_test`), MIGRATE_DATABASE_URL and ADMIN_DATABASE_URL, from the environment or
-`.env`. The owner URL is pointed at the test database automatically. The
+`_test`), MIGRATE_DATABASE_URL and ADMIN_DATABASE_URL, from the environment
+only: tests never read `.env` (run `uv run --env-file .env pytest` to load it
+into the environment yourself). The owner URL is pointed at the test database automatically. The
 session bootstraps and migrates the test database once (creating it if missing).
 """
 
@@ -27,7 +28,7 @@ CHECKPOINT_TABLES = ("checkpoints", "checkpoint_blobs", "checkpoint_writes")
 
 
 class _TestEnv(BaseSettings):
-    model_config = SettingsConfigDict(env_file=ROOT / ".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=None, extra="ignore")
 
     test_database_url: PostgresUrl | None = None
     migrate_database_url: PostgresUrl | None = None

@@ -48,8 +48,13 @@ def test_exception_is_logged_in_exc_field(capsys: pytest.CaptureFixture[str]) ->
 
 def _access_record(path: str) -> logging.LogRecord:
     return logging.LogRecord(
-        "uvicorn.access", logging.INFO, __file__, 0,
-        '%s - "%s %s HTTP/%s" %d', ("127.0.0.1:5000", "GET", path, "1.1", 200), None,
+        "uvicorn.access",
+        logging.INFO,
+        __file__,
+        0,
+        '%s - "%s %s HTTP/%s" %d',
+        ("127.0.0.1:5000", "GET", path, "1.1", 200),
+        None,
     )
 
 

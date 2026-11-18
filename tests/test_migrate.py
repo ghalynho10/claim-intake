@@ -14,7 +14,9 @@ from claim_intake.db.urls import username
 PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"
 
 
-def test_schemas_exist_and_belong_to_owner(engine: Engine, migrate_settings: MigrateSettings) -> None:
+def test_schemas_exist_and_belong_to_owner(
+    engine: Engine, migrate_settings: MigrateSettings
+) -> None:
     with engine.connect() as conn:
         rows = conn.execute(
             text(
@@ -29,29 +31,34 @@ def test_schemas_exist_and_belong_to_owner(engine: Engine, migrate_settings: Mig
 
 def test_checkpoint_tables_live_in_langgraph_schema_only(engine: Engine) -> None:
     with engine.connect() as conn:
-        found = conn.execute(
-            text(
-                "SELECT table_schema FROM information_schema.tables "
-                "WHERE table_name = 'checkpoints'"
+        found = (
+            conn.execute(
+                text(
+                    "SELECT table_schema FROM information_schema.tables "
+                    "WHERE table_name = 'checkpoints'"
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
     assert found == ["langgraph"]
 
 
 def test_alembic_version_table_in_public(engine: Engine) -> None:
     with engine.connect() as conn:
-        assert conn.execute(text("SELECT to_regclass('public.alembic_version')")).scalar() is not None
+        assert (
+            conn.execute(text("SELECT to_regclass('public.alembic_version')")).scalar() is not None
+        )
 
 
 def test_app_role_can_write_checkpoint_tables(db_session: Session) -> None:
-    db_session.execute(
-        text(
-            "INSERT INTO langgraph.checkpoint_migrations (v) VALUES (-1)"
-        )
+    db_session.execute(text("INSERT INTO langgraph.checkpoint_migrations (v) VALUES (-1)"))
+    assert (
+        db_session.execute(
+            text("SELECT count(*) FROM langgraph.checkpoint_migrations WHERE v = -1")
+        ).scalar()
+        == 1
     )
-    assert db_session.execute(
-        text("SELECT count(*) FROM langgraph.checkpoint_migrations WHERE v = -1")
-    ).scalar() == 1
 
 
 @pytest.mark.parametrize("schema", ["public", "claims_system", "langgraph"])

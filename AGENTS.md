@@ -20,12 +20,12 @@ uv sync                                    # install (dev group included)
 docker compose up --build                  # whole system, one command
 docker compose up -d db && uv run python -m claim_intake.db.migrate   # host loop: db + migrate
 uv run uvicorn claim_intake.api.app:create_app --factory --reload     # host loop: app
-uv run pytest                              # tests (real Postgres; paid API tests need -m live)
-# After /develop tooling installs them:
+uv run --env-file .env pytest              # tests (real Postgres via TEST_DATABASE_URL; paid API tests need -m live)
+uv run pre-commit install                  # once per clone: pre-commit and commit-msg hooks
 uv run ruff check . && uv run ruff format .
 uv run mypy src/claim_intake
-uv run lint-imports
 uv run pre-commit run --all-files
+# uv run lint-imports                      # arrives with feature 3 (data model), once the claims_system table models exist
 ```
 
 ## Specs
@@ -50,9 +50,9 @@ Stored in `docs/specs/NNNN-title/` (`index.md`, `rationale.md`, `verify.md`). `d
 Chosen here, installed by `/develop tooling`:
 - **Ruff** for lint, import sorting and format (config in `pyproject.toml`).
 - **mypy strict** with the official Pydantic plugin, run on `src/claim_intake`. Overrides only per untyped third party module, never a blanket ignore. No SQLAlchemy mypy plugin (deprecated in SQLAlchemy 2.0; `Mapped[]` models type check without it).
-- **import-linter**, one `protected` contract: `protected_modules` is the claims_system table models, `allowed_importers` is `claim_intake.claims_system` only, so every other layer, including folders added later, is blocked without being listed. No other layer contracts until a real violation shows up.
-- **pre-commit** on every commit: Ruff lint + format, mypy, import-linter, `no-commit-to-branch` for `main`, and a `commit-msg` hook that rejects any commit carrying a `Co-Authored-By` trailer.
-- **CI**: one new `lint` job in the existing `.github/workflows/ci.yml` (ruff check, ruff format --check, mypy, lint-imports), same hardening: actions pinned by SHA, `contents: read`, `persist-credentials: false`. No second workflow file.
+- **import-linter**, one `protected` contract: `protected_modules` is the claims_system table models, `allowed_importers` is `claim_intake.claims_system` only, so every other layer, including folders added later, is blocked without being listed. No other layer contracts until a real violation shows up. Installed as a dev dependency now; the contract, its pre-commit hook and its CI step arrive with feature 3 (data model), because there are no table models to protect yet.
+- **pre-commit** on every commit: Ruff lint + format, mypy, import-linter (from feature 3), `no-commit-to-branch` for `main`, and a `commit-msg` hook that rejects any commit carrying a `Co-Authored-By` trailer.
+- **CI**: one new `lint` job in the existing `.github/workflows/ci.yml` (ruff check, ruff format --check, mypy; lint-imports from feature 3), same hardening: actions pinned by SHA, `contents: read`, `persist-credentials: false`. No second workflow file.
 
 ## Git
 

@@ -93,7 +93,9 @@ def _ensure_database(conn: psycopg.Connection, name: str, owner: str) -> None:
     exists = conn.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,)).fetchone()
     if exists is None:
         conn.execute(
-            sql.SQL("CREATE DATABASE {} OWNER {}").format(sql.Identifier(name), sql.Identifier(owner))
+            sql.SQL("CREATE DATABASE {} OWNER {}").format(
+                sql.Identifier(name), sql.Identifier(owner)
+            )
         )
         logger.info("created database %s", name)
 
@@ -104,7 +106,9 @@ def _setup_schemas(conn: psycopg.Connection, db: str, owner: str, app: str) -> N
     schema_list = sql.SQL(", ").join(schema_ids)
 
     conn.execute(
-        sql.SQL("GRANT CONNECT ON DATABASE {} TO {}, {}").format(sql.Identifier(db), owner_id, app_id)
+        sql.SQL("GRANT CONNECT ON DATABASE {} TO {}, {}").format(
+            sql.Identifier(db), owner_id, app_id
+        )
     )
     for schema in schema_ids:
         conn.execute(sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(schema))
@@ -127,9 +131,9 @@ def _setup_schemas(conn: psycopg.Connection, db: str, owner: str, app: str) -> N
     )
     # Objects that already exist, so a rerun repairs missing grants.
     conn.execute(
-        sql.SQL(
-            "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA {} TO {}"
-        ).format(schema_list, app_id)
+        sql.SQL("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA {} TO {}").format(
+            schema_list, app_id
+        )
     )
     conn.execute(
         sql.SQL("GRANT USAGE ON ALL SEQUENCES IN SCHEMA {} TO {}").format(schema_list, app_id)

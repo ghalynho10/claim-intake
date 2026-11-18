@@ -2,6 +2,7 @@
 .claude/
 .vscode/
 skills-lock.json
+test-preferences.json
 docs/
 CLAUDE.local.md
 
