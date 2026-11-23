@@ -35,10 +35,28 @@ class BootstrapError(Exception):
 
 
 def safe_error(exc: BaseException) -> str:
-    """First line of an error only: Postgres puts the failing SQL on later lines,
-    and a `CREATE ROLE ... PASSWORD` statement must never reach the logs."""
-    first_line = str(exc).strip().splitlines()[0] if str(exc).strip() else ""
-    return f"{type(exc).__name__}: {first_line}"
+    """Classify failures without letting driver supplied details reach logs."""
+    if isinstance(exc, BootstrapError):
+        return str(exc)
+
+    driver_error: psycopg.Error | None = exc if isinstance(exc, psycopg.Error) else None
+    if driver_error is None:
+        original = getattr(exc, "orig", None)
+        if isinstance(original, psycopg.Error):
+            driver_error = original
+    if driver_error is None:
+        return "operation failed"
+
+    sqlstate = driver_error.sqlstate or ""
+    if sqlstate.startswith("28"):
+        return "authentication failed"
+    if sqlstate == "42501":
+        return "permission denied"
+    if sqlstate == "3D000":
+        return "database missing"
+    if sqlstate.startswith("08") or isinstance(driver_error, psycopg.OperationalError):
+        return "cannot connect"
+    return "database operation failed"
 
 
 def run(settings: MigrateSettings) -> None:
@@ -68,7 +86,7 @@ def run(settings: MigrateSettings) -> None:
         _setup_schemas(conn, target_db, owner, app)
         conn.commit()
 
-    logger.info("bootstrap complete: database %s, owner %s, app %s", target_db, owner, app)
+    logger.info("bootstrap complete: database %s; login roles configured", target_db)
 
 
 def _role_exists(conn: psycopg.Connection, name: str) -> bool:
