@@ -9,7 +9,7 @@ import itertools
 import uuid
 
 import pytest
-from sqlalchemy import Engine, inspect, select, text
+from sqlalchemy import Engine, delete, inspect, select, text
 from sqlalchemy.orm import Session
 
 from claim_intake.claims_system.models import ClaimRecord
@@ -626,6 +626,63 @@ def test_log_state_and_version_checks(
             ),
             {"claim_id": claim_id, "version": version, "action": action},
         )
+
+
+# --- updated_at moves on ORM updates (AC-2) ----------------------------------
+# `now()` is the transaction's start time, so inside the rolled back
+# `db_session` an update would stamp the same instant as the insert. These
+# tests commit through their own sessions instead and delete the rows after.
+
+
+def test_claim_updated_at_moves_forward_on_an_orm_update(engine: Engine) -> None:
+    with Session(engine) as session:
+        claim = Claim(status=ClaimStatus.EXTRACTING)
+        session.add(claim)
+        session.commit()
+        claim_id, inserted_at = claim.id, claim.updated_at
+    try:
+        with Session(engine) as session:
+            stored = session.get_one(Claim, claim_id)
+            stored.status = ClaimStatus.PENDING_REVIEW
+            session.commit()
+
+        with Session(engine) as session:
+            after = session.get_one(Claim, claim_id)
+            assert after.status is ClaimStatus.PENDING_REVIEW
+            assert after.updated_at > inserted_at
+            assert after.created_at < after.updated_at
+    finally:
+        with Session(engine) as session:
+            session.execute(delete(Claim).where(Claim.id == claim_id))
+            session.commit()
+
+
+def test_field_updated_at_moves_forward_on_an_orm_update(engine: Engine) -> None:
+    with Session(engine) as session:
+        claim = Claim(status=ClaimStatus.PENDING_REVIEW)
+        session.add(claim)
+        session.flush()
+        field = _field(claim.id)
+        session.add(field)
+        session.commit()
+        claim_id, field_id, inserted_at = claim.id, field.id, field.updated_at
+    try:
+        with Session(engine) as session:
+            stored = session.get_one(ExtractedField, field_id)
+            stored.value = "P-2"
+            stored.value_origin = ValueOrigin.HUMAN_ENTERED
+            stored.review_status = ReviewStatus.CORRECTED
+            session.commit()
+
+        with Session(engine) as session:
+            after = session.get_one(ExtractedField, field_id)
+            assert after.updated_at > inserted_at
+            assert after.created_at < after.updated_at
+    finally:
+        with Session(engine) as session:
+            session.execute(delete(ExtractedField).where(ExtractedField.id == field_id))
+            session.execute(delete(Claim).where(Claim.id == claim_id))
+            session.commit()
 
 
 # --- every table, as the app role (AC-2) -------------------------------------
