@@ -20,8 +20,8 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
-    text,
 )
+from sqlalchemy import text as sql_text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -37,7 +37,7 @@ from claim_intake.db.states import (
     WriteStatus,
 )
 
-UUID_DEFAULT = text("uuidv7()")
+UUID_DEFAULT = sql_text("uuidv7()")
 
 
 class Claim(Base):
@@ -52,7 +52,7 @@ class Claim(Base):
     __table_args__ = (CheckConstraint("version >= 1", name="version_min"),)
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, server_default=UUID_DEFAULT)
-    version: Mapped[int] = mapped_column(Integer, server_default=text("1"))
+    version: Mapped[int] = mapped_column(Integer, server_default=sql_text("1"))
     status: Mapped[ClaimStatus] = mapped_column(state_column(ClaimStatus, "status"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
