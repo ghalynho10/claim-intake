@@ -25,7 +25,7 @@ uv run pre-commit install                  # once per clone: pre-commit and comm
 uv run ruff check . && uv run ruff format .
 uv run mypy src/claim_intake
 uv run pre-commit run --all-files
-# uv run lint-imports                      # arrives with feature 3 (data model), once the claims_system table models exist
+uv run lint-imports                        # import contract: only claim_intake.claims_system imports its table models
 ```
 
 ## Specs
@@ -41,6 +41,7 @@ Stored in `docs/specs/NNNN-title/` (`index.md`, `rationale.md`, `verify.md`). `d
 - Errors: typed exceptions per layer; the api layer maps them to HTTP responses in one place; messages never echo secrets, URLs or claim values.
 - Config comes from `pydantic-settings`, validated at startup; a bad value prints one line per setting (name, never value) and exits 1. Tunable settings arrive with the feature that first uses them.
 - Logs: one JSON line per event to stderr from every entry point, with `request_id` and `claim_id`. Never log claim text or field values.
+- Data model: a state column's allowed values are a `StrEnum` in `db/states.py` (no SQLAlchemy import), stored as text with a named CHECK through `db.base.state_column`, never a native Postgres enum. Every constraint takes its naming convention name, and tests pin those names, so renaming one is a breaking change.
 - UI meets WCAG AA: works by keyboard, labelled fields, readable contrast.
 - Tests: pure logic gets unit tests with no fakes; DB, graph and API paths get integration tests against real Postgres, never a database mock. A feature ships with its tests. Paid model API tests carry the `live` marker, never run in CI, and run only after a measured cost estimate and the engineer's go. Tests never read the developer's `.env`: build settings explicitly and generate every password, key or token at test time with `secrets.token_hex(8)`.
 - Conventional commit messages (`feat:`, `fix:`, `chore:`, `docs:`, `test:`, `refactor:`).
@@ -50,9 +51,9 @@ Stored in `docs/specs/NNNN-title/` (`index.md`, `rationale.md`, `verify.md`). `d
 Chosen here, installed by `/develop tooling`:
 - **Ruff** for lint, import sorting and format (config in `pyproject.toml`).
 - **mypy strict** with the official Pydantic plugin, run on `src/claim_intake`. Overrides only per untyped third party module, never a blanket ignore. No SQLAlchemy mypy plugin (deprecated in SQLAlchemy 2.0; `Mapped[]` models type check without it).
-- **import-linter**, one `protected` contract: `protected_modules` is the claims_system table models, `allowed_importers` is `claim_intake.claims_system` only, so every other layer, including folders added later, is blocked without being listed. No other layer contracts until a real violation shows up. Installed as a dev dependency now; the contract, its pre-commit hook and its CI step arrive with feature 3 (data model), because there are no table models to protect yet.
-- **pre-commit** on every commit: Ruff lint + format, mypy, import-linter (from feature 3), `no-commit-to-branch` for `main`, and a `commit-msg` hook that rejects any commit carrying a `Co-Authored-By` trailer.
-- **CI**: one new `lint` job in the existing `.github/workflows/ci.yml` (ruff check, ruff format --check, mypy; lint-imports from feature 3), same hardening: actions pinned by SHA, `contents: read`, `persist-credentials: false`. No second workflow file.
+- **import-linter**, one `protected` contract: `protected_modules` is the claims_system table models, `allowed_importers` is `claim_intake.claims_system` only, so every other layer, including folders added later, is blocked without being listed. No other layer contracts until a real violation shows up. The contract lives in `pyproject.toml` and runs as a pre-commit hook and a CI step.
+- **pre-commit** on every commit: Ruff lint + format, mypy, import-linter, `no-commit-to-branch` for `main`, and a `commit-msg` hook that rejects any commit carrying a `Co-Authored-By` trailer.
+- **CI**: one new `lint` job in the existing `.github/workflows/ci.yml` (ruff check, ruff format --check, mypy, lint-imports), same hardening: actions pinned by SHA, `contents: read`, `persist-credentials: false`. No second workflow file.
 
 ## Git
 
@@ -74,8 +75,10 @@ Installed in `.agents/skills/` (gitignored, so these links resolve only on the e
 - [docker-compose-patterns](.agents/skills/docker-compose-patterns/): `docker/skills`, services, healthchecks, dependency order
 - [github-actions-hardening](.agents/skills/github-actions-hardening/): `github/awesome-copilot`, CI workflow security
 
-Not yet chosen (offer when their feature starts): `sqlalchemy-alembic-expert-best-practices-code-review` (feature 3), `htmx`, `anthropic-claude-development`, `python-mcp-server-generator`, `postgresql-best-practices`, `pytest-coverage`.
-MCP servers: none connected (GitHub MCP server skipped for now).
+Not yet chosen (offer when their feature starts): `htmx`, `anthropic-claude-development`, `python-mcp-server-generator`, `pytest-coverage`.
+Declined: `postgresql-best-practices` (conflicts with the naming convention and the accepted columns).
+Deferred: `sqlalchemy-alembic-expert-best-practices-code-review` (`wispbit-ai/skills`), pinned to a commit, revisit when migrations first run against data that matters (the Phase 2 deployment).
+MCP servers: none connected (GitHub MCP server skipped for now; no PostgreSQL MCP server for now).
 
 ## Circuit breaker
 
