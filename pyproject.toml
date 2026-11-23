@@ -66,6 +66,17 @@ init_forbid_extra = true
 init_typed = true
 warn_required_dynamic_aliases = true
 
+[tool.importlinter]
+root_package = "claim_intake"
+
+# The app role can write the claims_system schema, so this import rule is what
+# keeps every claims system write behind claim_intake.claims_system (spec 0002).
+[[tool.importlinter.contracts]]
+name = "Only claims_system touches the claims system tables"
+type = "protected"
+protected_modules = ["claim_intake.claims_system.models"]
+allowed_importers = ["claim_intake.claims_system"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = ["-ra", "--strict-markers", "-m", "not live"]

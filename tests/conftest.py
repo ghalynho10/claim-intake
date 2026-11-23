@@ -7,7 +7,9 @@ into the environment yourself). The owner URL is pointed at the test database au
 session bootstraps and migrates the test database once (creating it if missing).
 """
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import AbstractContextManager, contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 
 import psycopg
@@ -15,12 +17,15 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import Engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from claim_intake.api.app import create_app
 from claim_intake.config import MigrateSettings, PostgresUrl, Settings
 from claim_intake.db import migrate
 from claim_intake.db.engine import make_engine
+from claim_intake.db.models import Claim, Document, EvidenceUnit
+from claim_intake.db.states import ClaimStatus, DocumentKind
 from claim_intake.db.urls import CHECKPOINT_SCHEMA, database_name, with_database
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -89,6 +94,66 @@ def db_session(engine: Engine) -> Iterator[Session]:
         finally:
             session.close()
             outer.rollback()
+
+
+@dataclass
+class ClaimChain:
+    claim: Claim
+    document: Document
+    units: list[EvidenceUnit]
+
+
+ChainFactory = Callable[..., ClaimChain]
+Violates = Callable[[str], AbstractContextManager[None]]
+
+
+@pytest.fixture
+def claim_chain(db_session: Session) -> ChainFactory:
+    """Builds a claim, one document at the claim's version, and its ordered
+    evidence units: the chain most data model tests stand on."""
+
+    def make(
+        unit_texts: Sequence[str] = ("Policy number: P-1", "Loss date: 2026-01-02"),
+        claim: Claim | None = None,
+        claim_version: int = 1,
+    ) -> ClaimChain:
+        if claim is None:
+            claim = Claim(status=ClaimStatus.EXTRACTING)
+            db_session.add(claim)
+            db_session.flush()
+        document = Document(
+            claim_id=claim.id,
+            claim_version=claim_version,
+            kind=DocumentKind.EMAIL,
+            text="\n".join(unit_texts),
+        )
+        db_session.add(document)
+        db_session.flush()
+        units = [
+            EvidenceUnit(document_id=document.id, position=i, text=t)
+            for i, t in enumerate(unit_texts)
+        ]
+        db_session.add_all(units)
+        db_session.flush()
+        return ClaimChain(claim, document, units)
+
+    return make
+
+
+@pytest.fixture
+def violates(db_session: Session) -> Violates:
+    """`with violates("uq_x"): ...` expects the block's flush or statement to
+    fail on exactly that constraint, inside a savepoint so the test goes on."""
+
+    @contextmanager
+    def check(constraint: str) -> Iterator[None]:
+        with pytest.raises(IntegrityError) as caught, db_session.begin_nested():
+            yield
+            db_session.flush()
+        diag = getattr(caught.value.orig, "diag", None)
+        assert diag is not None and diag.constraint_name == constraint
+
+    return check
 
 
 @pytest.fixture

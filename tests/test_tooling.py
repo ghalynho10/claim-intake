@@ -1,4 +1,5 @@
-"""The commit guards and test isolation that feature 2's tooling promises.
+"""The commit guards and test isolation that feature 2's tooling promises, and
+feature 3's import rule.
 
 The `Co-Authored-By` hook runs through pre-commit's own CLI in a throwaway git
 repo, with the hook definition read from the real `.pre-commit-config.yaml`, so
@@ -6,6 +7,7 @@ a change to that file is what these tests see. No network: the hook is local.
 """
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -18,6 +20,8 @@ from conftest import _TestEnv
 
 ROOT = Path(__file__).resolve().parent.parent
 PRE_COMMIT_CONFIG = ROOT / ".pre-commit-config.yaml"
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+LINT_IMPORTS = str(Path(sys.executable).parent / "lint-imports")
 HOOK_ID = "no-co-authored-by"
 
 
@@ -139,3 +143,50 @@ def test_test_settings_ignore_a_dotenv_file(
     assert env.test_database_url is None
     # An absolute path (say ROOT / ".env") would dodge the chdir above, so pin the source too.
     assert _TestEnv.model_config.get("env_file") is None
+
+
+# --- import rule (spec 0002, AC-9) -------------------------------------------
+
+
+def _lint_imports(cwd: Path, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [LINT_IMPORTS, "--no-cache"], cwd=cwd, env=env, capture_output=True, text=True
+    )
+
+
+def test_import_contract_holds_on_the_repo() -> None:
+    result = _lint_imports(ROOT)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_import_contract_fails_when_another_layer_imports_the_claims_system_models(
+    tmp_path: Path,
+) -> None:
+    """On a copy of the package, a module outside claims_system imports its models."""
+    shutil.copytree(
+        ROOT / "src" / "claim_intake",
+        tmp_path / "src" / "claim_intake",
+        ignore=shutil.ignore_patterns("__pycache__"),
+    )
+    shutil.copy(ROOT / "pyproject.toml", tmp_path / "pyproject.toml")
+    (tmp_path / "src" / "claim_intake" / "api" / "_probe_violation.py").write_text(
+        '"""Deliberate violation for the import contract test."""\n\n'
+        "from claim_intake.claims_system.models import ClaimRecord  # noqa: F401\n"
+    )
+    # PYTHONPATH puts the copy ahead of the editable install.
+    env = {**os.environ, "PYTHONPATH": str(tmp_path / "src")}
+
+    result = _lint_imports(tmp_path, env)
+
+    output = result.stdout + result.stderr
+    assert result.returncode != 0, output
+    assert "_probe_violation" in output
+
+
+def test_import_contract_runs_before_each_commit_and_in_ci() -> None:
+    hook = _local_hook("lint-imports")
+    assert hook["entry"] == "uv run lint-imports"
+    assert hook["pass_filenames"] is False
+    workflow: dict[str, Any] = yaml.safe_load(CI_WORKFLOW.read_text())
+    lint_steps = [step.get("run") for step in workflow["jobs"]["lint"]["steps"]]
+    assert "uv run lint-imports" in lint_steps
