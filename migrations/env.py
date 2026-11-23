@@ -7,12 +7,11 @@ it is skipped here, otherwise autogenerate would propose dropping its tables.
 from alembic import context
 from sqlalchemy import create_engine, pool
 
+import claim_intake.db.models  # noqa: F401  (registers the public tables on Base.metadata)
 from claim_intake.config import MigrateSettings, load_or_exit
 from claim_intake.db.base import Base
 from claim_intake.db.urls import CHECKPOINT_SCHEMA, sqlalchemy_url
 from claim_intake.logging import configure
-
-# Feature 3 imports its model modules here so autogenerate sees them.
 
 config = context.config
 target_metadata = Base.metadata
