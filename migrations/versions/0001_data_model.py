@@ -2,7 +2,7 @@
 
 Revision ID: 0001
 Revises:
-Create Date: 2026-11-23 16:13:18.665273
+Create Date: 2026-11-23 16:14:57.027225
 
 """
 
@@ -10,6 +10,7 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = "0001"
@@ -55,6 +56,92 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint("version >= 1", name=op.f("ck_claim_version_min")),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_claim")),
+    )
+    op.create_table(
+        "claim_record",
+        sa.Column("id", sa.Uuid(), server_default=sa.text("uuidv7()"), nullable=False),
+        sa.Column("claim_id", sa.Uuid(), nullable=False),
+        sa.Column("claim_version", sa.Integer(), nullable=False),
+        sa.Column(
+            "payload", postgresql.JSONB(none_as_null=True, astext_type=sa.Text()), nullable=False
+        ),
+        sa.Column("payload_hash", sa.Text(), nullable=False),
+        sa.Column("idempotency_key", sa.Text(), nullable=False),
+        sa.Column(
+            "written_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.CheckConstraint(
+            "jsonb_typeof(payload) = 'object'", name=op.f("ck_claim_record_payload_object")
+        ),
+        sa.CheckConstraint("claim_version >= 1", name=op.f("ck_claim_record_claim_version_min")),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_claim_record")),
+        sa.UniqueConstraint("claim_id", "claim_version", name=op.f("uq_claim_record_claim_id")),
+        sa.UniqueConstraint("idempotency_key", name=op.f("uq_claim_record_idempotency_key")),
+        schema="claims_system",
+    )
+    op.create_table(
+        "claim_decision",
+        sa.Column("id", sa.Uuid(), server_default=sa.text("uuidv7()"), nullable=False),
+        sa.Column("claim_id", sa.Uuid(), nullable=False),
+        sa.Column("claim_version", sa.Integer(), nullable=False),
+        sa.Column(
+            "outcome",
+            sa.Enum(
+                "approved",
+                "rejected",
+                name="outcome",
+                native_enum=False,
+                create_constraint=True,
+                length=32,
+            ),
+            nullable=False,
+        ),
+        sa.Column(
+            "payload", postgresql.JSONB(none_as_null=True, astext_type=sa.Text()), nullable=True
+        ),
+        sa.Column("payload_hash", sa.Text(), nullable=True),
+        sa.Column(
+            "write_status",
+            sa.Enum(
+                "pending",
+                "written",
+                "stale",
+                name="write_status",
+                native_enum=False,
+                create_constraint=True,
+                length=32,
+            ),
+            nullable=True,
+        ),
+        sa.Column("reviewer_name", sa.Text(), nullable=False),
+        sa.Column(
+            "decided_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.CheckConstraint(
+            "(outcome = 'approved' AND payload IS NOT NULL AND payload_hash IS NOT NULL AND "
+            "write_status IS NOT NULL) OR (outcome = 'rejected' AND payload IS NULL AND "
+            "payload_hash IS NULL AND write_status IS NULL)",
+            name=op.f("ck_claim_decision_outcome_fields"),
+        ),
+        sa.CheckConstraint(
+            "btrim(reviewer_name) <> ''", name=op.f("ck_claim_decision_reviewer_name_set")
+        ),
+        sa.CheckConstraint(
+            "payload IS NULL OR jsonb_typeof(payload) = 'object'",
+            name=op.f("ck_claim_decision_payload_object"),
+        ),
+        sa.CheckConstraint("claim_version >= 1", name=op.f("ck_claim_decision_claim_version_min")),
+        sa.ForeignKeyConstraint(
+            ["claim_id"], ["claim.id"], name=op.f("fk_claim_decision_claim_id_claim")
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_claim_decision")),
+        sa.UniqueConstraint("claim_id", "claim_version", name=op.f("uq_claim_decision_claim_id")),
     )
     op.create_table(
         "document",
@@ -144,8 +231,8 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.CheckConstraint(
-            "evidence_status <> 'found' "
-            "OR (proposed_value IS NOT NULL AND btrim(proposed_value) <> '')",
+            "evidence_status <> 'found' OR (proposed_value IS NOT NULL AND btrim(proposed_value) "
+            "<> '')",
             name=op.f("ck_extracted_field_found_has_value"),
         ),
         sa.ForeignKeyConstraint(
@@ -153,6 +240,58 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_extracted_field")),
         sa.UniqueConstraint("claim_id", "field_name", name=op.f("uq_extracted_field_claim_id")),
+    )
+    op.create_table(
+        "decision_log",
+        sa.Column("id", sa.Uuid(), server_default=sa.text("uuidv7()"), nullable=False),
+        sa.Column("claim_id", sa.Uuid(), nullable=False),
+        sa.Column("claim_version", sa.Integer(), nullable=False),
+        sa.Column(
+            "action",
+            sa.Enum(
+                "field_corrected",
+                "field_rejected",
+                "claim_approved",
+                "claim_rejected",
+                name="action",
+                native_enum=False,
+                create_constraint=True,
+                length=32,
+            ),
+            nullable=False,
+        ),
+        sa.Column("field_name", sa.Text(), nullable=True),
+        sa.Column("decision_id", sa.Uuid(), nullable=True),
+        sa.Column("reviewer_name", sa.Text(), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.CheckConstraint(
+            "(action IN ('field_corrected', 'field_rejected') AND field_name IS NOT NULL AND "
+            "decision_id IS NULL) OR (action IN ('claim_approved', 'claim_rejected') AND "
+            "field_name IS NULL AND decision_id IS NOT NULL)",
+            name=op.f("ck_decision_log_action_fields"),
+        ),
+        sa.CheckConstraint(
+            "btrim(reviewer_name) <> ''", name=op.f("ck_decision_log_reviewer_name_set")
+        ),
+        sa.CheckConstraint("claim_version >= 1", name=op.f("ck_decision_log_claim_version_min")),
+        sa.ForeignKeyConstraint(
+            ["claim_id"], ["claim.id"], name=op.f("fk_decision_log_claim_id_claim")
+        ),
+        sa.ForeignKeyConstraint(
+            ["decision_id"],
+            ["claim_decision.id"],
+            name=op.f("fk_decision_log_decision_id_claim_decision"),
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_decision_log")),
+    )
+    op.create_index(op.f("ix_decision_log_claim_id"), "decision_log", ["claim_id"], unique=False)
+    op.create_index(
+        op.f("ix_decision_log_decision_id"), "decision_log", ["decision_id"], unique=False
     )
     op.create_table(
         "evidence_unit",
@@ -200,7 +339,12 @@ def downgrade() -> None:
     op.drop_index("ix_citation_document_id", table_name="citation")
     op.drop_table("citation")
     op.drop_table("evidence_unit")
+    op.drop_index(op.f("ix_decision_log_decision_id"), table_name="decision_log")
+    op.drop_index(op.f("ix_decision_log_claim_id"), table_name="decision_log")
+    op.drop_table("decision_log")
     op.drop_table("extracted_field")
     op.drop_table("document")
+    op.drop_table("claim_decision")
+    op.drop_table("claim_record", schema="claims_system")
     op.drop_table("claim")
     # ### end Alembic commands ###

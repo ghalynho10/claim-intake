@@ -22,15 +22,19 @@ from sqlalchemy import (
     func,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from claim_intake.db.base import Base, state_column
 from claim_intake.db.states import (
     ClaimStatus,
+    DecisionOutcome,
     DocumentKind,
     EvidenceStatus,
+    LogAction,
     ReviewStatus,
     ValueOrigin,
+    WriteStatus,
 )
 
 UUID_DEFAULT = text("uuidv7()")
@@ -154,3 +158,76 @@ class Citation(Base):
     document_id: Mapped[uuid.UUID] = mapped_column()
     start_position: Mapped[int] = mapped_column(Integer)
     end_position: Mapped[int] = mapped_column(Integer)
+
+
+class ClaimDecision(Base):
+    """The one final decision on one claim version.
+
+    The UNIQUE (claim_id, claim_version) is the race guard: the loser of two
+    simultaneous decisions gets the violation. An approved decision carries the
+    exact payload, its hash and a write status; a rejected one carries none.
+    Its `id` is the source of the claims system idempotency key.
+    """
+
+    __tablename__ = "claim_decision"
+    __table_args__ = (
+        UniqueConstraint("claim_id", "claim_version"),
+        CheckConstraint("claim_version >= 1", name="claim_version_min"),
+        CheckConstraint(
+            "payload IS NULL OR jsonb_typeof(payload) = 'object'", name="payload_object"
+        ),
+        CheckConstraint("btrim(reviewer_name) <> ''", name="reviewer_name_set"),
+        CheckConstraint(
+            "(outcome = 'approved' AND payload IS NOT NULL AND payload_hash IS NOT NULL "
+            "AND write_status IS NOT NULL) "
+            "OR (outcome = 'rejected' AND payload IS NULL AND payload_hash IS NULL "
+            "AND write_status IS NULL)",
+            name="outcome_fields",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, server_default=UUID_DEFAULT)
+    claim_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("claim.id"))
+    claim_version: Mapped[int] = mapped_column(Integer)
+    outcome: Mapped[DecisionOutcome] = mapped_column(state_column(DecisionOutcome, "outcome"))
+    # none_as_null: Python None must be SQL NULL, not JSON null, or a rejected
+    # decision would fail ck_claim_decision_outcome_fields.
+    payload: Mapped[dict[str, str | None] | None] = mapped_column(JSONB(none_as_null=True))
+    payload_hash: Mapped[str | None] = mapped_column(Text)
+    write_status: Mapped[WriteStatus | None] = mapped_column(
+        state_column(WriteStatus, "write_status")
+    )
+    reviewer_name: Mapped[str] = mapped_column(Text)
+    decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class DecisionLog(Base):
+    """Who did what to a claim, without the values (so it never leaks claim text).
+
+    Field actions name a field; claim actions link the decision. Append only by
+    convention: nothing updates or deletes a row.
+    """
+
+    __tablename__ = "decision_log"
+    __table_args__ = (
+        CheckConstraint("claim_version >= 1", name="claim_version_min"),
+        CheckConstraint("btrim(reviewer_name) <> ''", name="reviewer_name_set"),
+        CheckConstraint(
+            "(action IN ('field_corrected', 'field_rejected') "
+            "AND field_name IS NOT NULL AND decision_id IS NULL) "
+            "OR (action IN ('claim_approved', 'claim_rejected') "
+            "AND field_name IS NULL AND decision_id IS NOT NULL)",
+            name="action_fields",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, server_default=UUID_DEFAULT)
+    claim_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("claim.id"), index=True)
+    claim_version: Mapped[int] = mapped_column(Integer)
+    action: Mapped[LogAction] = mapped_column(state_column(LogAction, "action"))
+    field_name: Mapped[str | None] = mapped_column(Text)
+    decision_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("claim_decision.id"), index=True
+    )
+    reviewer_name: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

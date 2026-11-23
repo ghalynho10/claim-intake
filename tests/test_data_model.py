@@ -9,16 +9,28 @@ import itertools
 import uuid
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import Engine, inspect, select, text
 from sqlalchemy.orm import Session
 
-from claim_intake.db.models import Citation, Claim, Document, EvidenceUnit, ExtractedField
+from claim_intake.claims_system.models import ClaimRecord
+from claim_intake.db.models import (
+    Citation,
+    Claim,
+    ClaimDecision,
+    DecisionLog,
+    Document,
+    EvidenceUnit,
+    ExtractedField,
+)
 from claim_intake.db.states import (
     ClaimStatus,
+    DecisionOutcome,
     DocumentKind,
     EvidenceStatus,
+    LogAction,
     ReviewStatus,
     ValueOrigin,
+    WriteStatus,
 )
 from conftest import ChainFactory, Violates
 
@@ -355,3 +367,311 @@ def test_citation_start_must_be_a_unit_of_its_own_document(
                 end_position=3,
             )
         )
+
+
+# --- claim_decision (AC-6) ---------------------------------------------------
+
+
+def _decision(
+    claim_id: uuid.UUID,
+    outcome: DecisionOutcome = DecisionOutcome.APPROVED,
+    claim_version: int = 1,
+    **overrides: object,
+) -> ClaimDecision:
+    values: dict[str, object] = {
+        "claim_id": claim_id,
+        "claim_version": claim_version,
+        "outcome": outcome,
+        "reviewer_name": "Dana Reviewer",
+    }
+    if outcome is DecisionOutcome.APPROVED:
+        values |= {
+            "payload": {"policy_number": "P-1", "loss_date": None},
+            "payload_hash": "hash-1",
+            "write_status": WriteStatus.PENDING,
+        }
+    values.update(overrides)
+    return ClaimDecision(**values)
+
+
+def test_second_decision_on_same_version_is_rejected_next_version_accepted(
+    db_session: Session, claim_chain: ChainFactory, violates: Violates
+) -> None:
+    claim_id = claim_chain().claim.id
+    db_session.add(_decision(claim_id, DecisionOutcome.APPROVED))
+    db_session.flush()
+    with violates("uq_claim_decision_claim_id"):
+        db_session.add(_decision(claim_id, DecisionOutcome.REJECTED))
+    db_session.add(_decision(claim_id, DecisionOutcome.REJECTED, claim_version=2))
+    db_session.flush()
+
+
+def test_approved_decision_round_trips_its_payload(
+    db_session: Session, claim_chain: ChainFactory
+) -> None:
+    decision = _decision(claim_chain().claim.id)
+    db_session.add(decision)
+    db_session.flush()
+    decision_id = decision.id
+    db_session.expire_all()
+
+    stored = db_session.get_one(ClaimDecision, decision_id)
+    assert _is_db_uuid(stored.id)
+    assert stored.payload == {"policy_number": "P-1", "loss_date": None}
+    assert stored.write_status is WriteStatus.PENDING
+    assert stored.decided_at is not None
+
+
+def test_rejected_decision_stores_payload_as_sql_null(
+    db_session: Session, claim_chain: ChainFactory
+) -> None:
+    decision = _decision(claim_chain().claim.id, DecisionOutcome.REJECTED, payload=None)
+    db_session.add(decision)
+    db_session.flush()
+    is_sql_null = db_session.execute(
+        text("SELECT payload IS NULL FROM claim_decision WHERE id = :id"), {"id": decision.id}
+    ).scalar_one()
+    assert is_sql_null is True
+
+
+@pytest.mark.parametrize("missing", ["payload", "payload_hash", "write_status"])
+def test_approved_decision_needs_payload_hash_and_write_status(
+    db_session: Session, claim_chain: ChainFactory, violates: Violates, missing: str
+) -> None:
+    claim_id = claim_chain().claim.id
+    with violates("ck_claim_decision_outcome_fields"):
+        db_session.add(_decision(claim_id, **{missing: None}))
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [("payload", {"a": "b"}), ("payload_hash", "h"), ("write_status", WriteStatus.PENDING)],
+)
+def test_rejected_decision_carries_none_of_them(
+    db_session: Session,
+    claim_chain: ChainFactory,
+    violates: Violates,
+    column: str,
+    value: object,
+) -> None:
+    claim_id = claim_chain().claim.id
+    with violates("ck_claim_decision_outcome_fields"):
+        db_session.add(_decision(claim_id, DecisionOutcome.REJECTED, **{column: value}))
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_decision_needs_a_reviewer_name(
+    db_session: Session, claim_chain: ChainFactory, violates: Violates, blank: str
+) -> None:
+    claim_id = claim_chain().claim.id
+    with violates("ck_claim_decision_reviewer_name_set"):
+        db_session.add(_decision(claim_id, reviewer_name=blank))
+
+
+@pytest.mark.parametrize("payload", ['["a"]', '"text"', "1", "null"])
+def test_decision_payload_must_be_a_json_object(
+    db_session: Session,
+    claim_chain: ChainFactory,
+    violates: Violates,
+    payload: str,
+) -> None:
+    """JSON `null` is not SQL NULL: it must be refused like any other non object."""
+    claim_id = claim_chain().claim.id
+    with violates("ck_claim_decision_payload_object"):
+        db_session.execute(
+            text(
+                "INSERT INTO claim_decision "
+                "(claim_id, claim_version, outcome, payload, payload_hash, write_status, "
+                "reviewer_name) "
+                "VALUES (:claim_id, 1, 'approved', CAST(:payload AS jsonb), 'h', 'pending', 'R')"
+            ),
+            {"claim_id": claim_id, "payload": payload},
+        )
+
+
+@pytest.mark.parametrize(
+    ("outcome", "write_status", "version", "constraint"),
+    [
+        ("maybe", "NULL", 1, "ck_claim_decision_outcome"),
+        ("approved", "'lost'", 1, "ck_claim_decision_write_status"),
+        ("approved", "'pending'", 0, "ck_claim_decision_claim_version_min"),
+    ],
+)
+def test_decision_state_and_version_checks(
+    db_session: Session,
+    claim_chain: ChainFactory,
+    violates: Violates,
+    outcome: str,
+    write_status: str,
+    version: int,
+    constraint: str,
+) -> None:
+    claim_id = claim_chain().claim.id
+    with violates(constraint):
+        db_session.execute(
+            text(
+                "INSERT INTO claim_decision "
+                "(claim_id, claim_version, outcome, payload, payload_hash, write_status, "
+                "reviewer_name) "
+                f"VALUES (:claim_id, :version, :outcome, '{{}}', 'h', {write_status}, 'R')"
+            ),
+            {"claim_id": claim_id, "version": version, "outcome": outcome},
+        )
+
+
+# --- decision_log (AC-7) -----------------------------------------------------
+
+LOG_COLUMNS = {
+    "id",
+    "claim_id",
+    "claim_version",
+    "action",
+    "field_name",
+    "decision_id",
+    "reviewer_name",
+    "created_at",
+}
+
+
+def test_decision_log_has_no_value_columns(engine: Engine) -> None:
+    assert {c["name"] for c in inspect(engine).get_columns("decision_log")} == LOG_COLUMNS
+
+
+def _log(claim_id: uuid.UUID, action: LogAction, **overrides: object) -> DecisionLog:
+    values: dict[str, object] = {
+        "claim_id": claim_id,
+        "claim_version": 1,
+        "action": action,
+        "reviewer_name": "Dana Reviewer",
+    }
+    values.update(overrides)
+    return DecisionLog(**values)
+
+
+def test_log_accepts_field_and_claim_actions(
+    db_session: Session, claim_chain: ChainFactory
+) -> None:
+    claim_id = claim_chain().claim.id
+    decision = _decision(claim_id)
+    db_session.add(decision)
+    db_session.flush()
+    rows = [
+        _log(claim_id, LogAction.FIELD_CORRECTED, field_name="policy_number"),
+        _log(claim_id, LogAction.FIELD_REJECTED, field_name="loss_date"),
+        _log(claim_id, LogAction.CLAIM_APPROVED, decision_id=decision.id),
+    ]
+    db_session.add_all(rows)
+    db_session.flush()
+    assert all(_is_db_uuid(r.id) for r in rows)
+
+
+@pytest.mark.parametrize(
+    ("action", "field_name", "with_decision"),
+    [
+        (LogAction.FIELD_CORRECTED, None, False),  # field action without a field
+        (LogAction.FIELD_REJECTED, "policy_number", True),  # field action with a decision
+        (LogAction.CLAIM_APPROVED, None, False),  # claim action without a decision
+        (LogAction.CLAIM_REJECTED, "policy_number", True),  # claim action with a field
+    ],
+)
+def test_log_action_shape_is_enforced(
+    db_session: Session,
+    claim_chain: ChainFactory,
+    violates: Violates,
+    action: LogAction,
+    field_name: str | None,
+    with_decision: bool,
+) -> None:
+    claim_id = claim_chain().claim.id
+    decision = _decision(claim_id)
+    db_session.add(decision)
+    db_session.flush()
+    decision_id = decision.id if with_decision else None
+    with violates("ck_decision_log_action_fields"):
+        db_session.add(_log(claim_id, action, field_name=field_name, decision_id=decision_id))
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_log_needs_a_reviewer_name(
+    db_session: Session, claim_chain: ChainFactory, violates: Violates, blank: str
+) -> None:
+    claim_id = claim_chain().claim.id
+    with violates("ck_decision_log_reviewer_name_set"):
+        db_session.add(
+            _log(claim_id, LogAction.FIELD_CORRECTED, field_name="f", reviewer_name=blank)
+        )
+
+
+@pytest.mark.parametrize(
+    ("action", "version", "constraint"),
+    [
+        ("field_edited", 1, "ck_decision_log_action"),
+        ("field_corrected", 0, "ck_decision_log_claim_version_min"),
+    ],
+)
+def test_log_state_and_version_checks(
+    db_session: Session,
+    claim_chain: ChainFactory,
+    violates: Violates,
+    action: str,
+    version: int,
+    constraint: str,
+) -> None:
+    claim_id = claim_chain().claim.id
+    with violates(constraint):
+        db_session.execute(
+            text(
+                "INSERT INTO decision_log (claim_id, claim_version, action, field_name, "
+                "reviewer_name) VALUES (:claim_id, :version, :action, 'f', 'R')"
+            ),
+            {"claim_id": claim_id, "version": version, "action": action},
+        )
+
+
+# --- every table, as the app role (AC-2) -------------------------------------
+
+
+def test_one_row_in_each_of_the_eight_tables_round_trips(
+    db_session: Session, claim_chain: ChainFactory
+) -> None:
+    """The happy path through the whole model: two documents, units, a field
+    with a citation, an approved decision, a log row and a claims system record."""
+    first = claim_chain(["Policy number: P-1"])
+    second = claim_chain(["Correction: P-2"], claim=first.claim, claim_version=2)
+    claim_id = first.claim.id
+
+    field = _field(claim_id)
+    db_session.add(field)
+    db_session.flush()
+    citation = Citation(
+        field_id=field.id, document_id=first.document.id, start_position=0, end_position=1
+    )
+    decision = _decision(claim_id, claim_version=2)
+    db_session.add_all([citation, decision])
+    db_session.flush()
+    log = _log(claim_id, LogAction.CLAIM_APPROVED, claim_version=2, decision_id=decision.id)
+    record = ClaimRecord(
+        claim_id=claim_id,
+        claim_version=2,
+        payload=decision.payload or {},
+        payload_hash=decision.payload_hash or "",
+        idempotency_key=str(decision.id),
+    )
+    db_session.add_all([log, record])
+    db_session.flush()
+
+    rows = {
+        Claim: first.claim.id,
+        Document: second.document.id,
+        EvidenceUnit: second.units[0].id,
+        ExtractedField: field.id,
+        Citation: citation.id,
+        ClaimDecision: decision.id,
+        DecisionLog: log.id,
+        ClaimRecord: record.id,
+    }
+    db_session.expire_all()
+    for model, row_id in rows.items():
+        stored = db_session.get_one(model, row_id)
+        assert _is_db_uuid(stored.id), model.__name__
+    assert db_session.get_one(ClaimRecord, record.id).payload == decision.payload

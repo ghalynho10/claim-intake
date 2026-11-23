@@ -24,6 +24,9 @@ EXPECTED_TABLES = {
     ("public", "evidence_unit"),
     ("public", "extracted_field"),
     ("public", "citation"),
+    ("public", "claim_decision"),
+    ("public", "decision_log"),
+    ("claims_system", "claim_record"),
 }
 
 
