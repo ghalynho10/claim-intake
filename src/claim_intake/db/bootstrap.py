@@ -30,13 +30,29 @@ MCP_ROLE = "claim_mcp"
 SCHEMAS = ("public", "claims_system", "langgraph")
 
 
-class BootstrapError(Exception):
+class ProjectError(Exception):
+    """Base for setup errors whose messages are project written (never contain a secret)."""
+
+
+class BootstrapError(ProjectError):
     """A setup problem worth one clear line (never contains a secret)."""
 
 
+def _diagnostic(exc: BaseException, sqlstate: str) -> str:
+    """Class name and SQLSTATE only: never the exception's own text."""
+    parts = [type(exc).__name__]
+    if sqlstate:
+        parts.append(f"SQLSTATE {sqlstate}")
+    return ", ".join(parts)
+
+
 def safe_error(exc: BaseException) -> str:
-    """Classify failures without letting driver supplied details reach logs."""
-    if isinstance(exc, BootstrapError):
+    """Classify failures without letting driver supplied details reach logs.
+
+    Project errors keep their own message; everything else gets a fixed phrase
+    plus the exception class name and, for driver errors, the SQLSTATE.
+    """
+    if isinstance(exc, ProjectError):
         return str(exc)
 
     driver_error: psycopg.Error | None = exc if isinstance(exc, psycopg.Error) else None
@@ -45,18 +61,21 @@ def safe_error(exc: BaseException) -> str:
         if isinstance(original, psycopg.Error):
             driver_error = original
     if driver_error is None:
-        return "operation failed"
+        return f"operation failed ({_diagnostic(exc, '')})"
 
     sqlstate = driver_error.sqlstate or ""
+    detail = _diagnostic(driver_error, sqlstate)
     if sqlstate.startswith("28"):
-        return "authentication failed"
-    if sqlstate == "42501":
-        return "permission denied"
-    if sqlstate == "3D000":
-        return "database missing"
-    if sqlstate.startswith("08") or isinstance(driver_error, psycopg.OperationalError):
-        return "cannot connect"
-    return "database operation failed"
+        phrase = "authentication failed"
+    elif sqlstate == "42501":
+        phrase = "permission denied"
+    elif sqlstate == "3D000":
+        phrase = "database missing"
+    elif sqlstate.startswith("08") or isinstance(driver_error, psycopg.OperationalError):
+        phrase = "cannot connect"
+    else:
+        phrase = "database operation failed"
+    return f"{phrase} ({detail})"
 
 
 def run(settings: MigrateSettings) -> None:

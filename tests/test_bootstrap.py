@@ -3,6 +3,7 @@
 import logging
 import secrets
 
+import psycopg
 import pytest
 from sqlalchemy.engine import URL, make_url
 
@@ -139,3 +140,33 @@ def test_success_log_omits_role_names(
     messages = "\n".join(record.getMessage() for record in caplog.records)
     assert "login roles configured" in messages
     _assert_no_connection_details(messages, (owner, app))
+
+
+def test_project_errors_keep_their_own_message() -> None:
+    message = "no pyproject.toml here; run from the project root"
+    assert bootstrap.safe_error(migrate.MigrateError(message)) == message
+    assert bootstrap.safe_error(bootstrap.BootstrapError(message)) == message
+
+
+def test_driver_error_keeps_class_name_and_sqlstate_but_no_details() -> None:
+    host = f"{secrets.token_hex(6)}.invalid"
+    login = f"user_{secrets.token_hex(4)}"
+    secret = secrets.token_hex(8)
+    port = "65432"
+    detail = f'connection to server at "{host}", port {port} failed for "{login}" ({secret})'
+    exc = psycopg.errors.UndefinedTable(detail)
+
+    message = bootstrap.safe_error(exc)
+
+    assert message == "database operation failed (UndefinedTable, SQLSTATE 42P01)"
+    _assert_no_connection_details(message, (host, port, login, secret))
+
+
+def test_connection_error_without_sqlstate_names_only_its_class() -> None:
+    exc = psycopg.OperationalError(f"could not translate host {secrets.token_hex(6)}.invalid")
+
+    assert bootstrap.safe_error(exc) == "cannot connect (OperationalError)"
+
+
+def test_unknown_error_names_only_its_class() -> None:
+    assert bootstrap.safe_error(ValueError(secrets.token_hex(8))) == "operation failed (ValueError)"
