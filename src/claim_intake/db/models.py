@@ -14,6 +14,8 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
+    Index,
     Integer,
     Text,
     UniqueConstraint,
@@ -23,7 +25,13 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from claim_intake.db.base import Base, state_column
-from claim_intake.db.states import ClaimStatus, DocumentKind
+from claim_intake.db.states import (
+    ClaimStatus,
+    DocumentKind,
+    EvidenceStatus,
+    ReviewStatus,
+    ValueOrigin,
+)
 
 UUID_DEFAULT = text("uuidv7()")
 
@@ -85,3 +93,64 @@ class EvidenceUnit(Base):
     document_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("document.id"))
     position: Mapped[int] = mapped_column(Integer)
     text: Mapped[str] = mapped_column(Text)
+
+
+class ExtractedField(Base):
+    """One field of a claim, with its three independent state axes.
+
+    `proposed_value` is what the model said and is never changed by a review;
+    `value` is the current value. Which field names exist is checked in code
+    (feature 5); the database takes any text.
+    """
+
+    __tablename__ = "extracted_field"
+    __table_args__ = (
+        UniqueConstraint("claim_id", "field_name"),
+        CheckConstraint(
+            "evidence_status <> 'found' "
+            "OR (proposed_value IS NOT NULL AND btrim(proposed_value) <> '')",
+            name="found_has_value",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, server_default=UUID_DEFAULT)
+    claim_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("claim.id"))
+    field_name: Mapped[str] = mapped_column(Text)
+    proposed_value: Mapped[str | None] = mapped_column(Text)
+    value: Mapped[str | None] = mapped_column(Text)
+    evidence_status: Mapped[EvidenceStatus] = mapped_column(
+        state_column(EvidenceStatus, "evidence_status")
+    )
+    value_origin: Mapped[ValueOrigin] = mapped_column(state_column(ValueOrigin, "value_origin"))
+    review_status: Mapped[ReviewStatus] = mapped_column(state_column(ReviewStatus, "review_status"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class Citation(Base):
+    """A range of evidence units, `[start_position, end_position)`, in one
+    document, backing one field.
+
+    The composite foreign key makes the start a real unit of that document. The
+    end staying within the document, and the document belonging to the field's
+    claim, are checked in code (feature 5).
+    """
+
+    __tablename__ = "citation"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["document_id", "start_position"],
+            ["evidence_unit.document_id", "evidence_unit.position"],
+        ),
+        CheckConstraint("start_position >= 0", name="start_min"),
+        CheckConstraint("end_position > start_position", name="range"),
+        Index("ix_citation_document_id", "document_id", "start_position"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, server_default=UUID_DEFAULT)
+    field_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("extracted_field.id"), index=True)
+    document_id: Mapped[uuid.UUID] = mapped_column()
+    start_position: Mapped[int] = mapped_column(Integer)
+    end_position: Mapped[int] = mapped_column(Integer)
