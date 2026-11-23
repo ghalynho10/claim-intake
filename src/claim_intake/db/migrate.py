@@ -19,7 +19,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from claim_intake.config import MigrateSettings, load_or_exit
 from claim_intake.db import bootstrap
-from claim_intake.db.bootstrap import BootstrapError, safe_error
+from claim_intake.db.bootstrap import ProjectError, safe_error
 from claim_intake.db.urls import CHECKPOINT_SCHEMA, checkpointer_conninfo
 from claim_intake.logging import configure
 
@@ -27,7 +27,7 @@ from claim_intake.logging import configure
 logger = logging.getLogger("claim_intake.db.migrate")
 
 
-class MigrateError(Exception):
+class MigrateError(ProjectError):
     """A migrate problem worth one clear line (never contains a secret)."""
 
 
@@ -70,7 +70,7 @@ def main() -> None:
     configure(settings.log_level)
     try:
         run(settings)
-    except (BootstrapError, MigrateError, CommandError, SQLAlchemyError, psycopg.Error) as exc:
+    except (ProjectError, CommandError, SQLAlchemyError, psycopg.Error) as exc:
         logger.error("migrate failed: %s", safe_error(exc))
         sys.exit(1)
 
