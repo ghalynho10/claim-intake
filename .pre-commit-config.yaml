@@ -32,6 +32,12 @@ repos:
         language: unsupported
         types: [python]
         pass_filenames: false
+      - id: lint-imports
+        name: import-linter (claims system boundary)
+        entry: uv run lint-imports
+        language: unsupported
+        types: [python]
+        pass_filenames: false
       - id: no-co-authored-by
         name: reject Co-Authored-By trailers
         entry: "(?i)^co-authored-by:"

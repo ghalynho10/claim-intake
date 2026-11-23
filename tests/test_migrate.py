@@ -159,3 +159,109 @@ def test_migrate_is_idempotent(migrate_settings: MigrateSettings, engine: Engine
     migrate.run(migrate_settings, pyproject=PYPROJECT)
     with engine.connect() as conn:
         assert conn.execute(text("SELECT 1")).scalar() == 1
+
+
+# Spec 0002, Constraint names: every unique, foreign key, CHECK and index name,
+# by table, besides the primary keys (added below).
+CONSTRAINT_NAMES = {
+    "claim": {"ck_claim_status", "ck_claim_version_min"},
+    "document": {
+        "uq_document_claim_id",
+        "fk_document_claim_id_claim",
+        "ck_document_kind",
+        "ck_document_claim_version_min",
+    },
+    "evidence_unit": {
+        "uq_evidence_unit_document_id",
+        "fk_evidence_unit_document_id_document",
+        "ck_evidence_unit_position_min",
+    },
+    "extracted_field": {
+        "uq_extracted_field_claim_id",
+        "fk_extracted_field_claim_id_claim",
+        "ck_extracted_field_evidence_status",
+        "ck_extracted_field_value_origin",
+        "ck_extracted_field_review_status",
+        "ck_extracted_field_found_has_value",
+    },
+    "citation": {
+        "fk_citation_field_id_extracted_field",
+        "fk_citation_document_id_evidence_unit",
+        "ck_citation_start_min",
+        "ck_citation_range",
+        "ix_citation_field_id",
+        "ix_citation_document_id",
+    },
+    "claim_decision": {
+        "uq_claim_decision_claim_id",
+        "fk_claim_decision_claim_id_claim",
+        "ck_claim_decision_outcome",
+        "ck_claim_decision_write_status",
+        "ck_claim_decision_claim_version_min",
+        "ck_claim_decision_payload_object",
+        "ck_claim_decision_reviewer_name_set",
+        "ck_claim_decision_outcome_fields",
+    },
+    "decision_log": {
+        "fk_decision_log_claim_id_claim",
+        "fk_decision_log_decision_id_claim_decision",
+        "ck_decision_log_action",
+        "ck_decision_log_claim_version_min",
+        "ck_decision_log_reviewer_name_set",
+        "ck_decision_log_action_fields",
+        "ix_decision_log_claim_id",
+        "ix_decision_log_decision_id",
+    },
+    "claim_record": {
+        "uq_claim_record_idempotency_key",
+        "uq_claim_record_claim_id",
+        "ck_claim_record_claim_version_min",
+        "ck_claim_record_payload_object",
+    },
+}
+
+# Postgres 18 also lists each NOT NULL column in pg_constraint (contype 'n',
+# named `<table>_<column>_not_null` by Postgres itself). They are column
+# nullability, not named constraints of the model, so they are left out here;
+# `alembic check` covers nullability.
+_DB_NAMES = text(
+    """
+    SELECT c.relname, con.conname
+    FROM pg_constraint con
+    JOIN pg_class c ON c.oid = con.conrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname IN ('public', 'claims_system')
+      AND c.relname <> 'alembic_version'
+      AND con.contype <> 'n'
+    UNION
+    SELECT tablename, indexname
+    FROM pg_indexes
+    WHERE schemaname IN ('public', 'claims_system') AND tablename <> 'alembic_version'
+    """
+)
+
+
+def test_constraint_names_match_the_spec(engine: Engine) -> None:
+    """AC-1: the database holds exactly the spec's names, each within
+    Postgres's 63 character limit (a longer name would be silently cut)."""
+    expected = {
+        (table, name)
+        for table, names in CONSTRAINT_NAMES.items()
+        for name in names | {f"pk_{table}"}
+    }
+    assert all(len(name) <= 63 for _, name in expected)
+    assert {table for _, table in EXPECTED_TABLES} == set(CONSTRAINT_NAMES)
+
+    with engine.connect() as conn:
+        found = {(table, name) for table, name in conn.execute(_DB_NAMES).all()}
+
+    assert found == expected
+    assert all(len(name) <= 63 for _, name in found)
+
+
+def test_citation_index_covers_document_and_start(engine: Engine) -> None:
+    with engine.connect() as conn:
+        definition = conn.execute(
+            text("SELECT indexdef FROM pg_indexes WHERE indexname = 'ix_citation_document_id'")
+        ).scalar_one()
+    assert definition.endswith("(document_id, start_position)")
