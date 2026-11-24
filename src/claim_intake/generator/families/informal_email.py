@@ -29,6 +29,10 @@ OPENING = "I am writing to report a car accident."
 CLOSING = "Thanks,"
 
 FIXED_TEXT: tuple[str, ...] = (SUBJECT, GREETING, OPENING, CLOSING)
+CHILD_CUES: dict[FieldName, str] = {
+    FieldName.INJURIES_WHO: "My passenger",
+    FieldName.POLICE_REPORT_NUMBER: "The report number is",
+}
 
 
 def _sentence(text: str, *assertions: Assertion) -> Line:
@@ -129,7 +133,7 @@ def render(scenario: Scenario, planned: tuple[FieldName, ...], rng: random.Rando
     if (injuries := asserted(FieldName.INJURIES_REPORTED)) is not None:
         lines.append(_phrase_line(FieldName.INJURIES_REPORTED, injuries))
     if (passenger := asserted(FieldName.INJURIES_WHO)) is not None:
-        cue = "My passenger"
+        cue = CHILD_CUES[FieldName.INJURIES_WHO]
         lines.append(
             _sentence(
                 f"{cue} {passenger} went to urgent care.",
@@ -139,7 +143,7 @@ def render(scenario: Scenario, planned: tuple[FieldName, ...], rng: random.Rando
     if (police := asserted(FieldName.POLICE_REPORT_FILED)) is not None:
         lines.append(_phrase_line(FieldName.POLICE_REPORT_FILED, police))
     if (report := asserted(FieldName.POLICE_REPORT_NUMBER)) is not None:
-        cue = "The report number is"
+        cue = CHILD_CUES[FieldName.POLICE_REPORT_NUMBER]
         lines.append(
             _sentence(
                 f"{cue} {report}.", Assertion(FieldName.POLICE_REPORT_NUMBER, report, report, cue)
@@ -158,4 +162,4 @@ def render(scenario: Scenario, planned: tuple[FieldName, ...], rng: random.Rando
     return lines
 
 
-SPEC = FamilySpec(FAMILY, DocumentKind.EMAIL, render, FIXED_TEXT)
+SPEC = FamilySpec(FAMILY, DocumentKind.EMAIL, render, FIXED_TEXT, CHILD_CUES)

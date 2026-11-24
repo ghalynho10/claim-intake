@@ -71,9 +71,12 @@ RenderFn = Callable[[Scenario, tuple[FieldName, ...], random.Random], list[Line]
 @dataclass(frozen=True)
 class FamilySpec:
     """A template family: its name, the document kind it writes, its renderer,
-    and its fixed text (greetings, headings, filler) for the table checks."""
+    its fixed text (greetings, headings, filler) for the table checks, and the
+    cue that opens each child field's line, so the verifier can prove a child
+    line is never written while the child is absent."""
 
     family: Family
     kind: DocumentKind
     render: RenderFn
-    fixed_text: tuple[str, ...] = field(default=())
+    fixed_text: tuple[str, ...] = ()
+    child_cues: dict[FieldName, str] = field(default_factory=dict)

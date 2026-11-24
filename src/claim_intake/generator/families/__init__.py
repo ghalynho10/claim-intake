@@ -5,11 +5,17 @@
 with no change to the packet format or the verifier.
 """
 
+from claim_intake.fields import FieldName
 from claim_intake.generator.families import informal_email
 from claim_intake.generator.families.base import FamilySpec
 from claim_intake.generator.models import Family
 
 FAMILIES: tuple[FamilySpec, ...] = (informal_email.SPEC,)
+
+
+def child_cues(field: FieldName) -> tuple[str, ...]:
+    """Every family's cue for a child field's line."""
+    return tuple(spec.child_cues[field] for spec in FAMILIES if field in spec.child_cues)
 
 
 def family_spec(family: Family) -> FamilySpec:
