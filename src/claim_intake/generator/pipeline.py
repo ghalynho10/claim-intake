@@ -6,13 +6,13 @@ a test can pass one that breaks a protected span and watch generation stop.
 """
 
 import random
-from collections.abc import Callable
 
 from claim_intake.fields import FieldName
 from claim_intake.generator.derive import derive_expected
 from claim_intake.generator.families import family_spec
 from claim_intake.generator.families.base import Line
 from claim_intake.generator.models import Claim, Document, EvidenceLine, Packet, family_for
+from claim_intake.generator.noise import NoiseFn, apply_noise
 from claim_intake.generator.plan import plan_claims
 from claim_intake.generator.values import sample_scenario
 from claim_intake.generator.verify import PacketVerificationError, verify_packet
@@ -20,14 +20,6 @@ from claim_intake.generator.verify import PacketVerificationError, verify_packet
 DEV_SEED = 2026
 DEV_COUNT = 20
 DOCUMENT_ID = "doc-1"
-
-NoiseFn = Callable[[list[Line], random.Random], list[str]]
-
-
-def no_noise(lines: list[Line], rng: random.Random) -> list[str]:
-    """Leave every line as rendered."""
-    del rng
-    return [line.text for line in lines]
 
 
 def packet_seed(master_seed: int, index: int) -> int:
@@ -64,7 +56,7 @@ def assemble_claims(rendered: list[Line], final: list[str]) -> list[Claim]:
     return claims
 
 
-def build_packet(index: int, seed: int = DEV_SEED, noise: NoiseFn = no_noise) -> Packet:
+def build_packet(index: int, seed: int = DEV_SEED, noise: NoiseFn = apply_noise) -> Packet:
     """Scenario, plan, render, noise, derive, verify: one packet or an error."""
     own_seed = packet_seed(seed, index)
     rng = random.Random(own_seed)
@@ -100,7 +92,7 @@ def build_packet(index: int, seed: int = DEV_SEED, noise: NoiseFn = no_noise) ->
 
 
 def generate_dataset(
-    seed: int = DEV_SEED, count: int = DEV_COUNT, noise: NoiseFn = no_noise
+    seed: int = DEV_SEED, count: int = DEV_COUNT, noise: NoiseFn = apply_noise
 ) -> list[Packet]:
     """Build and verify `count` packets; any failure raises before anything is returned."""
     return [build_packet(index, seed, noise) for index in range(count)]
