@@ -6,11 +6,11 @@ with no change to the packet format or the verifier.
 """
 
 from claim_intake.fields import FieldName
-from claim_intake.generator.families import informal_email
+from claim_intake.generator.families import formal_email, informal_email, web_form
 from claim_intake.generator.families.base import FamilySpec
 from claim_intake.generator.models import Family
 
-FAMILIES: tuple[FamilySpec, ...] = (informal_email.SPEC,)
+FAMILIES: tuple[FamilySpec, ...] = (informal_email.SPEC, formal_email.SPEC, web_form.SPEC)
 
 
 def child_cues(field: FieldName) -> tuple[str, ...]:

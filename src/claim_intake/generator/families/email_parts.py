@@ -6,12 +6,13 @@ text, so noise never edits them.
 """
 
 import random
+from dataclasses import dataclass
 from datetime import date, timedelta
 
 from claim_intake.fields import FieldName
-from claim_intake.generator.families.base import Assertion, Line
+from claim_intake.generator.families.base import Assertion, Line, Stated, stated_line, vehicle_line
 from claim_intake.generator.formatters import MONTH_ABBREVIATIONS, WEEKDAY_ABBREVIATIONS
-from claim_intake.generator.models import Scenario
+from claim_intake.generator.models import Family, Scenario
 
 CLAIMS_INBOX = "claims@example.com"
 _TOKEN_LETTERS = "bcdfghjkmnpqrstvwxz"
@@ -80,4 +81,44 @@ def sign_off(scenario: Scenario, planned: tuple[FieldName, ...], closing: str) -
     name = scenario.reporter_name
     if FieldName.REPORTER_NAME in planned and name is not None:
         lines.append(Line(name, (Assertion(FieldName.REPORTER_NAME, name, name, ""),)))
+    return lines
+
+
+@dataclass(frozen=True)
+class EmailTemplate:
+    """The fixed text of one email family and the order of its body sentences.
+
+    A body entry is a `Stated` field sentence, or a string: the prefix of the
+    combined vehicle sentence at that position.
+    """
+
+    family: Family
+    subject: str
+    greeting: str
+    opening: str
+    body: tuple[Stated | str, ...]
+    closing: str
+
+    def fixed_text(self) -> tuple[str, ...]:
+        """Subject, greeting, opening and closing, for the table checks."""
+        return (self.subject, self.greeting, self.opening, self.closing)
+
+
+def render_email(
+    template: EmailTemplate,
+    scenario: Scenario,
+    planned: tuple[FieldName, ...],
+    rng: random.Random,
+) -> list[Line]:
+    """Headers, greeting, one sentence per asserted field, then the sign off."""
+    lines = headers(scenario, planned, rng, template.subject)
+    lines += [Line(template.greeting), Line(""), Line(template.opening)]
+    for entry in template.body:
+        if isinstance(entry, str):
+            line = vehicle_line(scenario, planned, entry)
+        else:
+            line = stated_line(entry, scenario, planned, template.family, rng)
+        if line is not None:
+            lines.append(line)
+    lines += sign_off(scenario, planned, template.closing)
     return lines
