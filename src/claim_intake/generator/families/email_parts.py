@@ -1,0 +1,83 @@
+"""Header lines both email families share.
+
+`From` and `Date` are the headers RFC 5322 section 3.6 requires; `To` and
+`Subject` are added because real claim emails carry them. Headers are machine
+text, so noise never edits them.
+"""
+
+import random
+from datetime import date, timedelta
+
+from claim_intake.fields import FieldName
+from claim_intake.generator.families.base import Assertion, Line
+from claim_intake.generator.formatters import MONTH_ABBREVIATIONS, WEEKDAY_ABBREVIATIONS
+from claim_intake.generator.models import Scenario
+
+CLAIMS_INBOX = "claims@example.com"
+_TOKEN_LETTERS = "bcdfghjkmnpqrstvwxz"
+
+
+def sender_token(rng: random.Random) -> str:
+    """A `From` local part that is no one's name: two consonants and four digits."""
+    letters = "".join(rng.choice(_TOKEN_LETTERS) for _ in range(2))
+    return f"{letters}{rng.randrange(1000, 10_000)}"
+
+
+def from_line(scenario: Scenario, planned: tuple[FieldName, ...], token: str) -> Line:
+    """The `From` header; it shows the reporter's name only when the name is asserted."""
+    address = f"{token}@example.com"
+    name = scenario.reporter_name
+    if FieldName.REPORTER_NAME in planned and name is not None:
+        assertion = Assertion(FieldName.REPORTER_NAME, name, name, "From:")
+        return Line(f"From: {name} <{address}>", (assertion,), fixed=True)
+    return Line(f"From: {address}", fixed=True)
+
+
+def date_line(scenario: Scenario, rng: random.Random) -> Line:
+    """The `Date` header: the loss date plus 0 to 3 days, in an hour other than
+    the loss hour, so the header never repeats the loss time."""
+    if scenario.loss_date is None:
+        raise ValueError("every scenario has a loss date")
+    sent = date.fromisoformat(scenario.loss_date) + timedelta(days=rng.randrange(4))
+    loss_hour = int(scenario.loss_time[:2]) if scenario.loss_time else -1
+    hour = rng.choice([h for h in range(7, 22) if h != loss_hour])
+    # A minute equal to the loss hour could make "MM:SS" read as the loss time.
+    minute = rng.choice([m for m in range(60) if m != loss_hour])
+    second = rng.randrange(60)
+    weekday = WEEKDAY_ABBREVIATIONS[sent.weekday()]
+    month = MONTH_ABBREVIATIONS[sent.month - 1]
+    stamp = f"{sent.day:02d} {month} {sent.year} {hour:02d}:{minute:02d}:{second:02d} -0500"
+    return Line(f"Date: {weekday}, {stamp}", fixed=True)
+
+
+def headers(
+    scenario: Scenario,
+    planned: tuple[FieldName, ...],
+    rng: random.Random,
+    subject: str,
+) -> list[Line]:
+    """From, To, Date and Subject, then the blank line that ends the header block.
+
+    The subject names the policy number when it is asserted, which makes it a
+    second evidence line for that claim.
+    """
+    token = sender_token(rng)
+    lines = [from_line(scenario, planned, token), Line(f"To: {CLAIMS_INBOX}", fixed=True)]
+    lines.append(date_line(scenario, rng))
+    policy = scenario.policy_number
+    if FieldName.POLICY_NUMBER in planned and policy is not None:
+        assertion = Assertion(FieldName.POLICY_NUMBER, policy, policy, "policy")
+        lines.append(Line(f"Subject: {subject}, policy {policy}", (assertion,), fixed=True))
+    else:
+        lines.append(Line(f"Subject: {subject}", fixed=True))
+    lines.append(Line(""))
+    return lines
+
+
+def sign_off(scenario: Scenario, planned: tuple[FieldName, ...], closing: str) -> list[Line]:
+    """A blank line, the closing word, and the reporter's name when it is asserted."""
+    lines = [Line(""), Line(closing, fixed=True)]
+    name = scenario.reporter_name
+    if FieldName.REPORTER_NAME in planned and name is not None:
+        lines.append(Line(name, (Assertion(FieldName.REPORTER_NAME, name, name, ""),)))
+    return lines

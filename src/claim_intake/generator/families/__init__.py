@@ -1,0 +1,20 @@
+"""The family registry: one interchangeable renderer per template family.
+
+`FAMILIES` follows `Family` declaration order, so packet `index` renders with
+`FAMILIES[index % 3]`. Adding a family means one new module and one entry here,
+with no change to the packet format or the verifier.
+"""
+
+from claim_intake.generator.families import informal_email
+from claim_intake.generator.families.base import FamilySpec
+from claim_intake.generator.models import Family
+
+FAMILIES: tuple[FamilySpec, ...] = (informal_email.SPEC,)
+
+
+def family_spec(family: Family) -> FamilySpec:
+    """The registered spec of one family."""
+    for spec in FAMILIES:
+        if spec.family is family:
+            return spec
+    raise KeyError(family)
