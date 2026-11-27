@@ -142,6 +142,7 @@ def verify_packet(packet: Packet, lines_before_noise: list[str]) -> list[str]:
     problems: list[str] = []
     claims: list[Claim] = []
     final: list[str] = []
+    duplicated = False
     for document in packet.documents:
         if document.source_ref != f"{packet.packet_id}/{document.document_id}":
             problems.append(f"{document.document_id}: source_ref does not match its ids")
@@ -149,6 +150,7 @@ def verify_packet(packet: Packet, lines_before_noise: list[str]) -> list[str]:
         for claim in document.claims:
             if claim.field in seen:
                 problems.append(f"{claim.field}: more than one claim in one document")
+                duplicated = True
             seen.append(claim.field)
             problems += _check_claim(claim, document.lines, packet.scenario.value(claim.field))
         problems += _check_noise(document.claims, lines_before_noise, document.lines)
@@ -158,7 +160,9 @@ def verify_packet(packet: Packet, lines_before_noise: list[str]) -> list[str]:
 
     if [entry.field for entry in packet.expected] != list(FieldName):
         return [*problems, "expected: not one entry per field in FieldName order"]
-    if packet.expected != derive_expected(packet.scenario, claims):
+    # derive_expected refuses two claims for one field until feature 11 defines
+    # conflicts; that problem is already reported, so there is no key to compare.
+    if not duplicated and packet.expected != derive_expected(packet.scenario, claims):
         problems.append("expected: does not match the key derived from the claims")
 
     texts = {"before noise": "\n".join(lines_before_noise), "after noise": "\n".join(final)}
