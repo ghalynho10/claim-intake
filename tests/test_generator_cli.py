@@ -24,7 +24,7 @@ from claim_intake.generator.verify import PacketVerificationError
 # The SHA 256 of the 20 dev packets' bytes on Python 3.12. A deliberate change
 # to the generator means: copy the new digest here, then re read by hand only
 # the packets whose hash changed (spec 0003, AC-1 and AC-10).
-DEV_DIGEST = "4ce7b2330a9ba5ee91dfde0dd14e024de9f590328afea39f95cc36e3840a6f75"
+DEV_DIGEST = "c3ccbc069e55e9c5b937ef3e83f7fd2a6876f40e178fef94d7bfc2344af807a6"
 
 
 @pytest.fixture(scope="module")

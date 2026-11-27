@@ -179,13 +179,16 @@ INSURERS: tuple[str, ...] = (
     "Ironvale Assurance",
 )
 
+# Every description is a collision with another car that had a driver, because
+# every scenario has an other party with a name and a vehicle. Positions are
+# fixed: a packet that drew an entry keeps its random stream.
 LOSS_DESCRIPTIONS: tuple[str, ...] = (
     "Rear ended while stopped at a red light",
     "Sideswiped by a car changing lanes",
-    "Hit a parked car while reversing out of a space",
+    "Hit from behind by a car at a stop sign",
     "Struck at an intersection by a car that ran a stop sign",
-    "Clipped a mirror passing a delivery truck",
-    "Slid into a guardrail on a wet ramp",
+    "Struck head on by a car that crossed the center line",
+    "Struck by a car backing out of a parking space",
     "Bumped by a car pulling out of a driveway",
     "Hit from the side in a parking lot",
 )

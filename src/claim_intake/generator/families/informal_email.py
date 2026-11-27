@@ -12,8 +12,9 @@ from claim_intake.generator.families.base import FamilySpec, Line, Stated
 from claim_intake.generator.families.email_parts import EmailTemplate, render_email
 from claim_intake.generator.models import Family, Scenario
 
+# No possessive on the passenger: "My passenger" would say the reporter drove.
 CHILD_CUES: dict[FieldName, str] = {
-    FieldName.INJURIES_WHO: "My passenger",
+    FieldName.INJURIES_WHO: "The passenger",
     FieldName.POLICE_REPORT_NUMBER: "The report number is",
 }
 
@@ -39,7 +40,7 @@ TEMPLATE = EmailTemplate(
         Stated(FieldName.INJURIES_REPORTED, "{}."),
         Stated(
             FieldName.INJURIES_WHO,
-            "My passenger {} went to urgent care.",
+            "The passenger {} went to urgent care.",
             CHILD_CUES[FieldName.INJURIES_WHO],
         ),
         Stated(FieldName.POLICE_REPORT_FILED, "{}."),

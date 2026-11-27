@@ -16,6 +16,7 @@ from claim_intake.generator.models import Family, Scenario
 
 CLAIMS_INBOX = "claims@example.com"
 _TOKEN_LETTERS = "bcdfghjkmnpqrstvwxz"
+SENT_HOURS: tuple[int, ...] = tuple(range(7, 22))
 
 
 def sender_token(rng: random.Random) -> str:
@@ -35,16 +36,31 @@ def from_line(scenario: Scenario, planned: tuple[FieldName, ...], token: str) ->
 
 
 def date_line(scenario: Scenario, rng: random.Random) -> Line:
-    """The `Date` header: the loss date plus 0 to 3 days, in an hour other than
-    the loss hour, so the header never repeats the loss time."""
-    if scenario.loss_date is None:
-        raise ValueError("every scenario has a loss date")
-    sent = date.fromisoformat(scenario.loss_date) + timedelta(days=rng.randrange(4))
-    loss_hour = int(scenario.loss_time[:2]) if scenario.loss_time else -1
-    hour = rng.choice([h for h in range(7, 22) if h != loss_hour])
+    """The `Date` header: always sent after the loss, never in the loss hour.
+
+    The draws are the loss date plus 0 to 3 days and an hour other than the loss
+    hour. Only a header that would not be after the loss (same day, earlier hour)
+    is redrawn, after the other draws, so every other packet keeps its own random
+    stream: first with an hour after the loss hour, or, when no sent hour (07 to
+    21) is left that day, on a day 1 to 3 days later. The header and the loss
+    time are read as the same local time; the fixed offset is not modelled.
+    """
+    if scenario.loss_date is None or scenario.loss_time is None:
+        raise ValueError("every scenario has a loss date and a loss time")
+    loss_day = date.fromisoformat(scenario.loss_date)
+    loss_hour = int(scenario.loss_time[:2])
+    days = rng.randrange(4)
+    hour = rng.choice([h for h in SENT_HOURS if h != loss_hour])
     # A minute equal to the loss hour could make "MM:SS" read as the loss time.
     minute = rng.choice([m for m in range(60) if m != loss_hour])
     second = rng.randrange(60)
+    if days == 0 and hour < loss_hour:
+        later = [h for h in SENT_HOURS if h > loss_hour]
+        if later:
+            hour = rng.choice(later)
+        else:
+            days = 1 + rng.randrange(3)
+    sent = loss_day + timedelta(days=days)
     weekday = WEEKDAY_ABBREVIATIONS[sent.weekday()]
     month = MONTH_ABBREVIATIONS[sent.month - 1]
     stamp = f"{sent.day:02d} {month} {sent.year} {hour:02d}:{minute:02d}:{second:02d} -0500"

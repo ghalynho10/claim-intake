@@ -155,7 +155,7 @@ def test_child_found_without_a_yes_parent_is_reported(packet: Packet) -> None:
 def test_child_line_without_a_found_child_is_reported() -> None:
     packet = build_packet(3)
     assert _absent(packet, FieldName.INJURIES_WHO)
-    broken = with_lines(packet, lambda lines: [*lines, "My passenger went home."])
+    broken = with_lines(packet, lambda lines: [*lines, "The passenger went home."])
     problems = problems_for(verify_packet(broken, _before(broken)), FieldName.INJURIES_WHO)
     assert any("child line present while absent" in p for p in problems)
 
