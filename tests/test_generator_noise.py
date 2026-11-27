@@ -9,7 +9,7 @@ import random
 import pytest
 
 from claim_intake.fields import FieldName
-from claim_intake.generator.families.base import Assertion, Line
+from claim_intake.generator.families.base import Assertion, Line, merge_spans
 from claim_intake.generator.noise import apply_noise, no_noise
 from claim_intake.generator.pipeline import build_packet, generate_dataset
 from claim_intake.generator.verify import PacketVerificationError
@@ -23,6 +23,30 @@ def test_spans_cover_surface_cue_and_protected_words() -> None:
     assert "It was at about" in covered
     assert "2:30 PM" in covered
     assert "not" in covered
+
+
+@pytest.mark.parametrize(
+    ("spans", "merged"),
+    [
+        ([(5, 9), (0, 3)], ((0, 3), (5, 9))),
+        ([(0, 4), (2, 6)], ((0, 6),)),
+        ([(0, 4), (4, 6)], ((0, 6),)),
+        ([(0, 10), (2, 3)], ((0, 10),)),
+        ([], ()),
+    ],
+)
+def test_overlapping_or_touching_spans_merge(
+    spans: list[tuple[int, int]], merged: tuple[tuple[int, int], ...]
+) -> None:
+    # covers: AC-6 ("Overlapping spans merge")
+    assert merge_spans(spans) == merged
+
+
+def test_an_email_address_is_a_protected_span() -> None:
+    # covers: AC-9 (noise never edits an address, so it stays @example.com)
+    line = Line("Please write to claims@example.com tomorrow.")
+    covered = [line.text[start:end] for start, end in line.protected_spans()]
+    assert "claims@example.com" in covered
 
 
 def test_noise_never_edits_a_protected_span() -> None:

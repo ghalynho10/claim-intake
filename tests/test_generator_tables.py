@@ -21,9 +21,11 @@ from claim_intake.generator.formatters import (
     PHRASES,
     TIME_FORMAT_COUNT,
     all_phrases,
+    count_protected_words,
     format_date,
     format_phone,
     format_time,
+    has_word,
     has_word_normalized,
     parse_date,
     parse_phone,
@@ -174,3 +176,71 @@ def test_people_are_four_different_people() -> None:
 
 def test_family_order_is_the_registry_order() -> None:
     assert tuple(spec.family for spec in FAMILIES) == FAMILY_ORDER[: len(FAMILIES)]
+
+
+# --- checks added by /test ------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("haystack", "needle", "found"),
+    [
+        ("Ref PA1234567.", "PA1234567", True),
+        ("Ref PA12345678.", "PA1234567", False),
+        ("Ref XPA1234567", "PA1234567", False),
+        ("Policy number: PA1", "Policy number:", True),
+        ("Policy number:x", "Policy number:", False),
+        ("It was 2:30 PM.", "2:30 PM", True),
+        ("It was 12:30 PM.", "2:30 PM", False),
+        ("maria lopez", "Maria Lopez", False),
+    ],
+)
+def test_has_word_matches_only_on_word_boundaries(haystack: str, needle: str, found: bool) -> None:
+    # covers: AC-3 (the surface is matched on word boundaries)
+    assert has_word(haystack, needle) is found
+
+
+def test_normalized_match_ignores_case_and_runs_of_whitespace() -> None:
+    # covers: AC-4 (checks run after lowercasing and collapsing whitespace)
+    assert has_word_normalized("Luckily NO  one\twas\nhurt.", "No one was hurt")
+    assert not has_word_normalized("Nobody was hurt.", "No one was hurt")
+
+
+@pytest.mark.parametrize(
+    ("text", "count"),
+    [
+        ("It was not about 2:30 PM, no, never.", 4),
+        ("Nothing noted; notice the boat.", 0),
+        ("NOT about", 2),
+    ],
+)
+def test_protected_words_are_counted_as_whole_words_only(text: str, count: int) -> None:
+    # covers: AC-6 (the per line count of not, no, never, about)
+    assert count_protected_words(text) == count
+
+
+def test_sampled_values_stay_in_their_ranges() -> None:
+    # Values and formatters, Planning rules "Dates"
+    for index in range(100):
+        s = sample_scenario(index, random.Random(index))
+        assert s.loss_date is not None and s.loss_time is not None
+        assert LOSS_WINDOW_START <= date.fromisoformat(s.loss_date) <= LOSS_WINDOW_END
+        assert "06:00" <= s.loss_time <= "22:59"
+        assert s.vehicle_year is not None and 2008 <= int(s.vehicle_year) <= 2023
+        assert s.policy_number is not None
+        assert re.fullmatch(r"[A-Z]{2}\d{7}", s.policy_number)
+        if s.police_report_number is not None:
+            assert re.fullmatch(r"[A-Z]{2}\d{7}", s.police_report_number)
+        assert s.reporter_contact is not None
+        assert re.fullmatch(r"555-01\d\d", s.reporter_contact)
+
+
+def test_replaced_descriptions_stay_out_and_the_table_keeps_its_length() -> None:
+    # Planning rules "Loss descriptions": guards the first AC-10 read. Entries
+    # were replaced in place, so positions (and every packet's draws) hold.
+    assert len(LOSS_DESCRIPTIONS) == 8
+    for gone in (
+        "Hit a parked car while reversing out of a space",
+        "Clipped a mirror passing a delivery truck",
+        "Slid into a guardrail on a wet ramp",
+    ):
+        assert gone not in LOSS_DESCRIPTIONS

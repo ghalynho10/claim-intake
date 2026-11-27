@@ -7,10 +7,20 @@ would pass for the wrong reason.
 
 import pytest
 
+from claim_intake.db.states import EvidenceStatus
 from claim_intake.fields import FieldName
 from claim_intake.generator.derive import derive_expected
+from claim_intake.generator.families import child_cues
+from claim_intake.generator.formatters import (
+    PHONE_FORMAT_COUNT,
+    TIME_FORMAT_COUNT,
+    format_phone,
+    format_time,
+)
 from claim_intake.generator.models import Claim, EvidenceLine, Packet
 from claim_intake.generator.pipeline import build_packet
+from claim_intake.generator.plan import PARENTS
+from claim_intake.generator.values import INSURERS
 from claim_intake.generator.verify import PacketVerificationError, verify_packet
 from generator_helpers import (
     claim,
@@ -168,3 +178,129 @@ def test_real_looking_contact_data_is_reported(packet: Packet, line: str) -> Non
     broken = with_lines(packet, lambda lines: [*lines, line])
     problems = verify_packet(broken, _before(broken))
     assert any(p.startswith("privacy:") for p in problems)
+
+
+# --- checks added by /test: verifier rules the tests above leave untried ---------
+
+
+def test_claim_without_evidence_is_reported(packet: Packet) -> None:
+    # covers: AC-3 (each claim sits on at least one evidence line)
+    broken = with_claim(
+        packet, FieldName.LOSS_DATE, lambda c: c.model_copy(update={"evidence": []})
+    )
+    problems = problems_for(verify_packet(broken, _before(packet)), FieldName.LOSS_DATE)
+    assert any("no evidence line" in p for p in problems)
+
+
+def test_cue_missing_from_its_evidence_lines_is_reported(packet: Packet) -> None:
+    # covers: AC-3 (a phrase or role cue is kept with its claim)
+    broken = with_claim(
+        packet, FieldName.LOSS_DATE, lambda c: c.model_copy(update={"cue": "Written on"})
+    )
+    problems = problems_for(verify_packet(broken, _before(packet)), FieldName.LOSS_DATE)
+    assert any("cue missing" in p for p in problems)
+
+
+def test_two_claims_for_one_field_are_reported_not_raised(packet: Packet) -> None:
+    # covers: AC-2, AC-3 (verify_packet returns every problem as a list)
+    doc = document(packet)
+    twice = claim(packet, FieldName.LOSS_DATE)
+    broken = with_document(packet, claims=[*doc.claims, twice])
+    problems = problems_for(verify_packet(broken, _before(packet)), FieldName.LOSS_DATE)
+    assert any("more than one claim" in p for p in problems)
+
+
+def test_source_ref_that_does_not_match_the_ids_is_reported(packet: Packet) -> None:
+    # covers: AC-2 (source_ref is "<packet_id>/<document_id>")
+    broken = with_document(packet, source_ref="pkt-999/doc-1")
+    problems = verify_packet(broken, _before(packet))
+    assert any("source_ref does not match" in p for p in problems)
+
+
+def test_expected_out_of_field_order_is_reported(packet: Packet) -> None:
+    # covers: AC-2 (exactly one entry per FieldName, in FieldName order)
+    broken = packet.model_copy(update={"expected": list(reversed(packet.expected))})
+    problems = verify_packet(broken, _before(packet))
+    assert "expected: not one entry per field in FieldName order" in problems
+
+
+def test_expected_that_is_not_the_derived_key_is_reported(packet: Packet) -> None:
+    # covers: AC-2 (expected comes from derive_expected, never by hand)
+    expected = [
+        e.model_copy(update={"status": EvidenceStatus.ABSENT, "value": None, "evidence": []})
+        if e.field is FieldName.LOSS_LOCATION
+        else e
+        for e in packet.expected
+    ]
+    broken = packet.model_copy(update={"expected": expected})
+    problems = verify_packet(broken, _before(packet))
+    assert "expected: does not match the key derived from the claims" in problems
+
+
+def test_absent_field_that_a_line_still_claims_is_reported(packet: Packet) -> None:
+    # covers: AC-4 (line check: no line carries a claim for an absent field)
+    expected = [
+        e.model_copy(update={"status": EvidenceStatus.ABSENT, "value": None, "evidence": []})
+        if e.field is FieldName.LOSS_DATE
+        else e
+        for e in packet.expected
+    ]
+    broken = packet.model_copy(update={"expected": expected})
+    problems = problems_for(verify_packet(broken, _before(packet)), FieldName.LOSS_DATE)
+    assert any("absent but a line carries a claim" in p for p in problems)
+
+
+@pytest.mark.parametrize(
+    ("index", "field", "style"),
+    [(1, FieldName.LOSS_TIME, style) for style in range(TIME_FORMAT_COUNT)]
+    + [(3, FieldName.REPORTER_CONTACT, style) for style in range(PHONE_FORMAT_COUNT)],
+)
+def test_absent_value_leaked_in_any_format_is_reported(
+    index: int, field: FieldName, style: int
+) -> None:
+    # covers: AC-4 (every surface form the formatter can produce is checked)
+    packet = build_packet(index)  # the rotation omits this field in this packet
+    assert _absent(packet, field)
+    truth = packet.scenario.value(field)
+    assert truth is not None
+    leak = format_time(truth, style) if field is FieldName.LOSS_TIME else format_phone(truth, style)
+    broken = with_lines(packet, lambda lines: [*lines, f"Noted: {leak}."])
+    problems = problems_for(verify_packet(broken, _before(broken)), field)
+    assert any("absent value appears" in p for p in problems)
+
+
+def test_absent_field_without_a_true_value_skips_the_value_check() -> None:
+    # covers: AC-4 (no true value: only the line and phrase checks apply)
+    packet = build_packet(3)  # index % 4 == 3: the other party has no insurer
+    field = FieldName.OTHER_PARTY_INSURER
+    assert packet.scenario.value(field) is None
+    assert _absent(packet, field)
+    broken = with_lines(packet, lambda lines: [*lines, f"Insured with {INSURERS[0]}."])
+    assert problems_for(verify_packet(broken, _before(broken)), field) == []
+
+
+def test_child_found_under_a_no_parent_is_reported(packet: Packet) -> None:
+    # covers: AC-5 (a child is found only under a found "yes" parent)
+    assert not _absent(packet, FieldName.INJURIES_WHO)
+    broken = with_claim(
+        packet, FieldName.INJURIES_REPORTED, lambda c: c.model_copy(update={"value": "no"})
+    )
+    claims = document(broken).claims
+    broken = broken.model_copy(update={"expected": derive_expected(broken.scenario, claims)})
+    problems = problems_for(verify_packet(broken, _before(packet)), FieldName.INJURIES_WHO)
+    assert any("without a found yes parent" in p for p in problems)
+
+
+@pytest.mark.parametrize(
+    ("child", "cue"),
+    [(child, cue) for child in PARENTS for cue in child_cues(child)],
+)
+def test_any_familys_child_line_without_a_found_child_is_reported(
+    child: FieldName, cue: str
+) -> None:
+    # covers: AC-5 (a child's line appears only when the child is found)
+    packet = build_packet(3)  # both parents are "no" here, so both children are absent
+    assert _absent(packet, child)
+    broken = with_lines(packet, lambda lines: [*lines, f"{cue} Someone Else."])
+    problems = problems_for(verify_packet(broken, _before(broken)), child)
+    assert any("child line present while absent" in p for p in problems)

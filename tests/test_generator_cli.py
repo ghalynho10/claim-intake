@@ -104,6 +104,25 @@ def test_command_refuses_existing_packets_unless_forced(tmp_path: Path) -> None:
     ]
 
 
+def test_command_takes_the_master_seed_from_seed(tmp_path: Path) -> None:
+    # covers: AC-8, Value sourcing "Seed a packet" (--seed overrides DEV_SEED)
+    out = tmp_path / "dev"
+    result = _command(out, "--seed", "7", "--count", "3")
+    assert result.returncode == 0, result.stderr
+    seeds = [read_packet(p).seed for p in sorted(out.glob("pkt-*.json"))]
+    assert seeds == [70_000, 70_001, 70_002]
+
+
+@pytest.mark.parametrize("count", ["0", "-1"])
+def test_command_rejects_a_count_below_one_and_writes_nothing(tmp_path: Path, count: str) -> None:
+    # covers: AC-8 (bad arguments are refused before anything is written)
+    out = tmp_path / "dev"
+    result = _command(out, "--count", count)
+    assert result.returncode == 2
+    assert "--count" in result.stderr
+    assert not out.exists()
+
+
 def _break_surfaces(lines: list[Line], rng: object) -> list[str]:
     del rng
     out = []
