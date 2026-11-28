@@ -26,6 +26,7 @@ uv run ruff check . && uv run ruff format .
 uv run mypy src/claim_intake
 uv run pre-commit run --all-files
 uv run lint-imports                        # import contract: only claim_intake.claims_system imports its table models
+uv run python -m claim_intake.generator    # write the 20 synthetic dev packets to data/dev/ (--force replaces them)
 ```
 
 ## Specs
@@ -36,6 +37,8 @@ Stored in `docs/specs/NNNN-title/` (`index.md`, `rationale.md`, `verify.md`). `d
 
 - Layered monolith with ports and adapters, as spec 0001 sets out. One package per layer: api (HTTP only), graph (the LangGraph workflow), llm (the ModelClient Protocol, its Anthropic implementation and a fake), claims_system (ClaimsSystemClient, the only code that touches claims_system tables), db (engine, session, models, bootstrap). Outside systems sit behind a Protocol with one real implementation and one fake for tests. Logic that needs no I/O (parsing, validation, scoring) is plain functions with typed inputs and outputs, tested without fakes. Prefer a plain function over a class where one works. No extra domain, application or infrastructure folders.
 - Folders by layer, as the scaffold has them. `ui/`, `generator/`, `scoring/`, `mcp_server/` arrive with their features, never stubbed early.
+- Claim fields: `claim_intake/fields.py` (`FieldName`) is the one list of the 19 fields, in contract order. Every layer imports it, never copies it.
+- Generated data goes to the ignored `data/` folder and is rebuilt from a seed, never committed.
 - Strict typing: every function fully annotated, no implicit `Any`, mypy strict passes.
 - Docstrings: a module docstring on every module, and one on public functions and classes saying why, not what.
 - Errors: typed exceptions per layer; the api layer maps them to HTTP responses in one place; messages never echo secrets, URLs or claim values.
@@ -93,5 +96,6 @@ which /checkpoint reads and ages out.
 ## Context files
 
 <!-- Nested AGENTS.md files are listed here as they are created -->
+- [src/claim_intake/generator/AGENTS.md](src/claim_intake/generator/AGENTS.md): the synthetic packet generator, its command, determinism and label rules
 
 _Drafted by /audit from the repo, worth a quick human pass. Edit freely: once a line stops matching this draft, later runs treat it as curated and will flag rather than overwrite it._

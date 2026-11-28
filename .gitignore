@@ -19,3 +19,6 @@ __pycache__/
 dist/
 build/
 *.egg-info/
+
+# Generated data (regenerated from a seed, never stored)
+data/
